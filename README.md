@@ -17,7 +17,7 @@ Built with Python, DuckDB SQL, scikit-learn/statsmodels and Plotly on seven year
 | **Winter Storm Uri** | Served demand peaked at **69.2 GW in the hour ending 8 pm on Feb 14 2021**. Over the next 54 hours generation fell **38.7% (68.0 to 41.7 GW)**: gas down 15.6 GW, wind 4.8 GW, coal 4.6 GW, nuclear 1.4 GW. EIA's demand fell in step to about 43 GW, because EIA reports *served* demand. **ERCOT's own day-ahead forecast ran up to 28.9 GW above served demand** (peaking at 76.8 GW) and **1,568 GWh above it over Feb 15–18**. That is an upper bound on load shed, since it also includes forecast error and conservation. EIA has no missing hours that week. |
 | **Forecast vs ERCOT** | Our day-ahead model reached **2.52% MAPE** (RMSE 1,971 MWh) on 2024–2025, against **8.52%** for the same-hour-last-week baseline. **ERCOT's official forecast scored 2.31%** (RMSE 1,756 MWh) on the same hours. ERCOT wins overall, but ours won on **46% of days** and edged it in 2025 (2.41% vs 2.46%) and in summer. Caveat: our model uses actual weather, and ERCOT had to use forecasts. The result holds on ERCOT's own API (its 9:30 am day-before posting: 2.38%). |
 | **What drives the model** | Day of week and Dallas temperature matter most, then Tyler, hour of day, and Austin, San Antonio and Houston temperatures. The four added cities together (0.97 pts) matter more than Dallas alone (0.88). Testing the 6 pm theory exposed a bug: load-level inputs made the model under-forecast by about 1,000 MWh. Removing them cut error from 2.94% to 2.52%. |
-| **Biggest misses** | The worst days are Hurricane Beryl, cold-snap holidays (MLK Day 2024 and 2025) and sudden warm-ups after cold snaps (Jan 18–19, 2024). The holiday flag barely registers in the model (about 10 holidays a year to learn from): holiday MAPE is 3.93% against 2.48%. The theory that 6 pm heating or AC on workdays needs a correction was tested and rejected. |
+| **Biggest misses** | The worst days are Hurricane Beryl, cold-snap holidays (MLK Day 2024 and 2025) and sudden warm-ups after cold snaps (Jan 18–19, 2024). The holiday flag barely registers in the model (about 10 holidays a year to learn from): holiday MAPE is 3.93% against 2.48%. |
 
 ## Data sources
 
@@ -316,22 +316,13 @@ The context column is generated from the data (holidays, the day after a holiday
 | Holidays | 3.93% |
 | Other days | 2.48% |
 
-### The 6 pm question: heating and AC when people get home?
+### The 6 pm question
 
-Hour ending 6 pm was the first model's worst hour. The theory: on workdays, people get home and switch on heating in winter or AC in summer, so a 6 pm correction for cold or hot workday evenings should help (`notebooks/05_drivers_and_misses.ipynb`, section 4).
+Hour ending 6 pm was the first model's worst hour, which raised a question: do people get home and switch on heating or AC? That would call for a correction on cold or hot workday evenings.
 
-**How it was tested:**
-1. Train on 2019–2022 and take the model's 6 pm errors in 2023.
-2. Regress those errors on heating degrees, cooling degrees, a workday flag and their interactions.
-3. Apply the fitted correction to the 2024–25 forecasts.
+A correction for heating, AC and workdays was fit on 2023 errors and applied to 2024–25. It made 6 pm accuracy slightly *worse* (3.04% → 3.10%), and none of its terms was significant in 2023. So no correction was added.
 
-**Results:**
-- **Most of the 6 pm problem was the level-input bug above.** Fixing it cut 6 pm error from 3.44% to 3.04%, and 6 pm is no longer the worst hour.
-- **The workday theory isn't supported.** In 2023 none of the heating, AC or workday terms is close to significant (p = 0.25–0.91).
-- **In 2024–25 the pattern runs the other way.** Cold and heat raise 6 pm errors on **weekends and holidays** (heating +191 MWh per °C, p = 0.003; AC +64 MWh per °C, p = 0.007), and the workday interactions cancel them out. People do run more heating and AC in the evening, but on days they're home, not the commute. It doesn't show up in 2023, so it isn't stable.
-- **The correction makes things worse.** Fit on 2023 and applied to 2024–25, the heating/AC × workday correction raises 6 pm error from 3.04% to 3.10%, and a 5–8 pm version raises it from 2.87% to 2.92%. A constant adjustment changes nothing.
-
-**Conclusion:** no 6 pm coefficient was added.
+Investigating why 6 pm looked bad is what found the load-level input bug above. That bug, not commuter heating, was most of the 6 pm problem. The full test is in `notebooks/05_drivers_and_misses.ipynb`, section 4.
 
 ## Weather-adjusted demand growth
 
