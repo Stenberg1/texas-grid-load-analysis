@@ -9,6 +9,7 @@ CREATE OR REPLACE TABLE raw_holidays   AS SELECT * FROM read_parquet('data/clean
 CREATE OR REPLACE TABLE raw_forecast   AS SELECT * FROM read_parquet('data/raw/ercot_forecast.parquet');
 CREATE OR REPLACE TABLE raw_zone_load  AS SELECT * FROM read_parquet('data/raw/ercot_zone_load.parquet');
 CREATE OR REPLACE TABLE raw_henry_hub  AS SELECT * FROM read_parquet('data/raw/henry_hub.parquet');
+CREATE OR REPLACE TABLE raw_ercot_models AS SELECT * FROM read_parquet('data/raw/ercot_forecast_models.parquet');
 
 -- Fuel dimension
 CREATE OR REPLACE TABLE dim_fuel (
@@ -90,6 +91,12 @@ SELECT period, forecast_mwh FROM raw_forecast;
 
 CREATE OR REPLACE TABLE fact_zone_load AS
 SELECT period, zone, demand_mwh FROM raw_zone_load;
+
+-- ERCOT API: the 09:30 posting on the day before delivery, every forecast model, by weather zone (2024-2025)
+CREATE OR REPLACE TABLE fact_ercot_forecast_model AS
+SELECT period, posted_ct, model, in_use, system_total_mwh,
+       coast, east, far_west, north, north_central, south_central, southern, west
+FROM raw_ercot_models;
 
 CREATE OR REPLACE TABLE fact_gas_price AS
 SELECT date AS trade_date, price_usd_mmbtu FROM raw_henry_hub;

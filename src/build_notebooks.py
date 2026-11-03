@@ -229,6 +229,40 @@ print("Days ERCOT beat us by the most:")
 display(gap.sort_values("gap", ascending=False).head(5).round(1))
 print("Days we beat ERCOT by the most:")
 gap.sort_values("gap").head(5).round(1)'''),
+    ("md", """## ERCOT API: the 9:30 am day-ahead posting, every forecast model
+ERCOT re-posts its 7-day forecast every hour. `src/pull_ercot.py` keeps, for each delivery day, the posting made at 09:30 Central the day before (the last one before the 10:00 day-ahead market closes), for all of ERCOT's forecast models, with the model ERCOT flagged as in use."""),
+    ("code", '''display(q("SELECT * FROM ercot_model_accuracy"))
+display(q("SELECT * FROM ercot_model_in_use"))
+api = q("SELECT period, system_total_mwh AS ercot_api_mwh FROM fact_ercot_forecast_model WHERE in_use")
+api = api.groupby("period", as_index=False).ercot_api_mwh.mean()   # guard against two in-use rows
+cmp = test.merge(api, on="period", how="inner")
+print(f"hours with an ERCOT API forecast: {len(cmp):,} of {len(test):,}")
+head = pd.DataFrame({
+    "ERCOT 9:30 am posting, in-use model (ERCOT API)": metrics(cmp.demand_mwh, cmp.ercot_api_mwh),
+    "ERCOT day-ahead forecast (EIA-930 copy)": metrics(cmp.demand_mwh, cmp.ercot_forecast_mwh),
+    f"Ours: {best_name}": metrics(cmp.demand_mwh, cmp.pred_best),
+    "Baseline: same hour last week": metrics(cmp.demand_mwh, cmp.pred_baseline),
+}).T.round(2)
+head.to_csv("data/clean/ercot_api_comparison.csv")
+head'''),
+    ("md", """## Does our model add anything to ERCOT's? A blend, weight chosen on 2024, tested on 2025
+If a weighted average of our forecast and ERCOT's beats ERCOT alone, our model carries information ERCOT's forecast misses. The weight is fit on 2024 only, then scored on 2025."""),
+    ("code", '''def mape(y, p):
+    return float(100 * ((y - p).abs() / y).mean())
+c24, c25 = cmp[cmp.period.dt.year == 2024], cmp[cmp.period.dt.year == 2025]
+grid = np.round(np.arange(0, 1.01, 0.05), 2)
+fit = pd.Series({w: mape(c24.demand_mwh, w * c24.pred_best + (1 - w) * c24.ercot_api_mwh) for w in grid})
+w = fit.idxmin()
+blend25 = w * c25.pred_best + (1 - w) * c25.ercot_api_mwh
+blend = pd.DataFrame({
+    "ERCOT alone (API, in-use)": {"MAPE 2025 (%)": mape(c25.demand_mwh, c25.ercot_api_mwh)},
+    "Ours alone": {"MAPE 2025 (%)": mape(c25.demand_mwh, c25.pred_best)},
+    f"Blend: {w:.2f} ours + {1 - w:.2f} ERCOT": {"MAPE 2025 (%)": mape(c25.demand_mwh, blend25)},
+}).T.round(2)
+blend["weight on ours (fit on 2024)"] = [np.nan, np.nan, w]
+blend.to_csv("data/clean/blend_2025.csv")
+blend'''),
+    ("code", 'q("SELECT * FROM ercot_zone_accuracy")'),
     ("md", "## Where does it fail?"),
     ("code", '''by_hour = test.groupby("local_hour")[["ape_best", "ape_baseline", "ape_ercot"]].mean().round(2)
 by_season = test.groupby("season")[["ape_best", "ape_baseline", "ape_ercot"]].mean().round(2).loc[["Winter", "Spring", "Summer", "Fall"]]
@@ -414,5 +448,174 @@ fig.update_layout(title="How much gas loses to coal when gas prices double, by y
 first, late = by_year.iloc[0], by_year[by_year.year >= 2022]
 add_caption(fig, f"Fuel switching has faded: {first.shift_per_doubling_pts:+.1f} pts per doubling in {int(first.year)}, {late.shift_per_doubling_pts.min():+.1f} to {late.shift_per_doubling_pts.max():+.1f} since 2022 as coal shrank. Pooled: {b:+.1f} pts. Bars: 95% CI.")
 save(fig, "gas_price_switching")'''),
+])
+# ---------------------------------------------------------------- 05 growth, drivers, misses
+build("05_drivers_and_misses.ipynb", [
+    ("md", """# 05 · Weather-adjusted growth, what drives the model, and its biggest misses"""),
+    ("code", SETUP + '''
+import statsmodels.formula.api as smf
+import plotly.graph_objects as go
+from viz import add_caption, save, SERIES, INK, INK_2'''),
+    ("md", """## 1. Weather-adjusted demand growth
+Peak load rose about 15% from 2019 to the 2024 record. Is that growth, or hotter summers?
+Fit **log(load)** on temperature (cooling and heating degrees and their squares, each allowed to differ by hour of day),
+hour, weekday, month and holidays, plus a **year effect**. The year effect is the change in load at identical weather and calendar.
+Uri (Feb 10–20 2021) and the Hurricane Beryl outage period (Jul 8–17 2024) are excluded because load there was lost to outages, not weather.
+A second fit uses only summer afternoons (Jun–Sep, hour ending 2–8 pm), the hours that set the annual peak."""),
+    ("code", '''df = q("SELECT * FROM model_hourly WHERE year BETWEEN 2019 AND 2025 ORDER BY period")
+w = df[~df.local_date.between("2021-02-10", "2021-02-20")
+       & ~df.local_date.between("2024-07-08", "2024-07-17")
+       & ~df.is_imputed.astype(bool)].copy()
+w["cdd"] = (w.avg_temp_c - 18.3).clip(lower=0)
+w["hdd"] = (18.3 - w.avg_temp_c).clip(lower=0)
+w["log_d"] = np.log(w.demand_mwh)
+YEARS = range(2020, 2026)
+
+all_hours = smf.ols("log_d ~ C(year) + (cdd + I(cdd**2) + hdd + I(hdd**2)):C(local_hour)"
+                    " + C(local_hour) + C(day_of_week) + is_holiday + C(month)", w).fit()
+summer = w[w.month.between(6, 9) & w.local_hour.between(14, 20)]
+summer_fit = smf.ols("log_d ~ C(year) + (cdd + I(cdd**2)):C(local_hour) + C(local_hour)"
+                     " + C(day_of_week) + is_holiday + C(month)", summer).fit()
+print(f"R^2 all hours {all_hours.rsquared:.3f}, summer afternoons {summer_fit.rsquared:.3f}")
+
+def year_pct(m):
+    return {2019: 0.0, **{y: 100 * (np.exp(m.params[f"C(year)[T.{y}]"]) - 1) for y in YEARS}}
+def year_ci(m):
+    return {2019: 0.0, **{y: 100 * 1.96 * m.bse[f"C(year)[T.{y}]"] for y in YEARS}}
+
+raw_avg = w.groupby("year").demand_mwh.mean()
+peak = q("SELECT year, peak_mwh FROM peak_growth_yearly").set_index("year").peak_mwh
+growth = pd.DataFrame({
+    "raw average load vs 2019 (%)": 100 * (raw_avg / raw_avg[2019] - 1),
+    "weather-adjusted, all hours (%)": year_pct(all_hours),
+    "weather-adjusted, summer afternoons (%)": year_pct(summer_fit),
+    "raw annual peak vs 2019 (%)": 100 * (peak / peak[2019] - 1),
+    "summer cooling degrees (avg °C above 18.3)": w[w.month.between(6, 9)].groupby("year").cdd.mean(),
+}).round(2)
+growth.to_csv("data/clean/weather_adjusted_growth.csv")
+growth'''),
+    ("code", '''# Where the growth is: average load by ERCOT weather zone, full clean years only
+# (zone data starts May 2019 and drifts from the ERCOT total in 2024-25, see qa_zone_mismatch)
+q("""SELECT zone,
+            ROUND(AVG(demand_mwh) FILTER (WHERE year(period) = 2020)) AS avg_2020_mwh,
+            ROUND(AVG(demand_mwh) FILTER (WHERE year(period) = 2023)) AS avg_2023_mwh,
+            ROUND(100 * (AVG(demand_mwh) FILTER (WHERE year(period) = 2023)
+                       / AVG(demand_mwh) FILTER (WHERE year(period) = 2020) - 1), 1) AS growth_pct
+     FROM fact_zone_load GROUP BY zone ORDER BY growth_pct DESC""")'''),
+    ("code", '''fig = go.Figure()
+series = [("raw average load vs 2019 (%)", "Actual average load", "Actual"),
+          ("weather-adjusted, all hours (%)", "Weather-adjusted, all hours", "Weather-adjusted"),
+          ("weather-adjusted, summer afternoons (%)", "Weather-adjusted, summer afternoons", "Summer afternoons")]
+for i, (col, name, short) in enumerate(series):
+    fig.add_scatter(x=growth.index, y=growth[col], mode="lines+markers", name=name,
+                    line=dict(color=SERIES[i], width=2.5), marker=dict(size=8),
+                    hovertemplate=f"{short} · %{{x}}: %{{y:+.1f}}%<extra></extra>")
+    fig.add_annotation(x=2025, y=growth[col].iloc[-1], text=f"{short} {growth[col].iloc[-1]:+.0f}%", showarrow=False,
+                       xanchor="left", xshift=8, font=dict(color=INK))
+fig.add_hline(y=0, line=dict(color=INK_2, width=1))
+fig.update_layout(title="ERCOT load growth since 2019, with and without weather",
+                  xaxis_title="Year", yaxis_title="Change vs 2019 (%)", xaxis=dict(tickvals=list(range(2019, 2026)), range=[2018.7, 2026.3]),
+                  margin=dict(r=190))
+adj = growth["weather-adjusted, all hours (%)"]
+add_caption(fig, f"At identical weather, ERCOT load grew {adj[2025]:.0f}% from 2019 to 2025, about {100*((1+adj[2025]/100)**(1/6)-1):.1f}% a year. Hotter summers are not the explanation.")
+save(fig, "weather_adjusted_growth")'''),
+    ("md", """## 2. What drives the model: each city separately
+Same day-ahead setup as notebook 02 (train 2019–2023, predict the change from yesterday, test 2024–2025), but with each of the 8 cities' temperature (and its value 24 h earlier) as separate inputs instead of the weighted average.
+**Grouped permutation importance:** shuffle one group of inputs on the test set (for a city, both its temperature columns together), and measure how much MAPE rises. Five shuffles per group.
+Caveat: city temperatures are correlated, so cities that move together split the credit. A low score means "adds little the other cities don't already carry", not "irrelevant\""""),
+    ("code", '''from sklearn.ensemble import HistGradientBoostingRegressor
+cities = q("PIVOT (SELECT period, city, temp_c FROM fact_weather) ON city USING first(temp_c)")
+name_of = {f"t_{c.lower().replace(' ', '_')}": c for c in cities.columns[1:]}
+cities.columns = ["period"] + list(name_of)
+d = df.merge(cities, on="period").sort_values("period")
+tcols = list(name_of)
+for c in tcols:
+    d[c + "_lag24"] = d[c].shift(24)
+d["is_weekend"] = d.is_weekend.astype(int)
+d["is_holiday"] = d.is_holiday.astype(int)
+d = d.dropna(subset=["demand_lag_168"] + [c + "_lag24" for c in tcols])
+base = ["demand_lag_24", "demand_lag_168", "local_hour", "day_of_week", "month", "is_weekend", "is_holiday"]
+feats = base + tcols + [c + "_lag24" for c in tcols]
+tr, te = d[d.period.dt.year <= 2023], d[d.period.dt.year >= 2024]
+gb = HistGradientBoostingRegressor(random_state=0).fit(tr[feats], tr.demand_mwh - tr.demand_lag_24)
+def mape_of(X):
+    p = te.demand_lag_24.values + gb.predict(X[feats])   # anchor stays the true value; only model inputs are shuffled
+    return 100 * np.mean(np.abs(te.demand_mwh.values - p) / te.demand_mwh.values)
+base_mape = mape_of(te)
+print(f"per-city model, test MAPE: {base_mape:.2f}%  (weighted-average model in notebook 02: 2.94%)")
+
+groups = {name_of[c]: [c, c + "_lag24"] for c in tcols}
+groups.update({"Demand 24 h earlier": ["demand_lag_24"], "Demand 1 week earlier": ["demand_lag_168"],
+               "Hour of day": ["local_hour"], "Day of week": ["day_of_week"], "Month": ["month"],
+               "Holiday / weekend": ["is_holiday", "is_weekend"]})
+rng = np.random.default_rng(0)
+rows = []
+for g, cols in groups.items():
+    rises = []
+    for _ in range(5):
+        X = te.copy()
+        idx = rng.permutation(len(X))
+        for c in cols:
+            X[c] = X[c].values[idx]
+        rises.append(mape_of(X) - base_mape)
+    rows.append({"input": g, "is_city": g in name_of.values(), "mape_increase_pts": np.mean(rises), "sd": np.std(rises)})
+imp = pd.DataFrame(rows).sort_values("mape_increase_pts", ascending=False).round(3)
+imp.to_csv("data/clean/feature_importance.csv", index=False)
+imp'''),
+    ("code", '''srt = imp.sort_values("mape_increase_pts")
+fig = go.Figure()
+for is_city, label, color in [(True, "City temperature", SERIES[0]), (False, "Other input", SERIES[1])]:
+    s = srt[srt.is_city == is_city]
+    fig.add_bar(y=s.input, x=s.mape_increase_pts, orientation="h", name=label, marker_color=color,
+                error_x=dict(type="data", array=s.sd, color=INK_2, thickness=1),
+                hovertemplate="%{y}: +%{x:.2f} pts<extra></extra>")
+fig.update_layout(title="What drives the day-ahead forecast (test set 2024–2025)", barmode="overlay", bargap=0.3,
+                  xaxis_title="Rise in MAPE when the input is shuffled (percentage points)", yaxis_title="",
+                  yaxis=dict(categoryorder="array", categoryarray=list(srt.input)), margin=dict(l=170))
+top_city = imp[imp.is_city].iloc[0]
+add_caption(fig, f"Yesterday's load matters most; among cities, {top_city.input} leads. The four added cities together matter less than Dallas alone.")
+save(fig, "feature_importance", height=680)'''),
+    ("md", """## 3. The model's 10 biggest misses
+Worst days on the test set by daily MAPE for the main model (notebook 02). The context column is generated from the data: holidays, the day after a holiday (the model anchors on yesterday's load), freezing or extreme heat, and big temperature swings from the day before. The one hand-labelled event is Hurricane Beryl."""),
+    ("code", '''t = pd.read_parquet("data/clean/test_predictions.parquet")
+t["local_date"] = t.local_ts.dt.normalize()
+t["err"] = t.pred_best - t.demand_mwh
+hol = pd.read_parquet("data/clean/us_holidays.parquet")
+hol = dict(zip(pd.to_datetime(hol.holiday_date), hol.holiday_name))
+tl = q("SELECT period, avg_temp_c - temp_lag_24 AS temp_delta_24 FROM model_hourly")
+t = t.merge(tl, on="period", how="left")
+KNOWN = {pd.Timestamp("2024-07-08"): "Hurricane Beryl made landfall near Houston; about 2.2 million customers lost power"}
+
+def worst_hour(g):
+    r = g.loc[g.err.abs().idxmax()]
+    return pd.Series({"worst_hour_ending": int(r.local_hour), "worst_hour_error_gw": r.err / 1000})
+
+days = t.groupby("local_date").agg(our_mape=("ape_best", "mean"), ercot_mape=("ape_ercot", "mean"),
+                                   mean_error_gw=("err", lambda e: e.mean() / 1000), min_temp=("avg_temp_c", "min"),
+                                   max_temp=("avg_temp_c", "max"), max_swing=("temp_delta_24", lambda s: s.abs().max()))
+days = days.join(t.groupby("local_date")[["err", "local_hour"]].apply(worst_hour))
+worst = days.sort_values("our_mape", ascending=False).head(10).copy()
+
+def context(day, r):
+    notes = []
+    if day in KNOWN: notes.append(KNOWN[day])
+    if day in hol: notes.append(f"Holiday: {hol[day]}")
+    y = day - pd.Timedelta(days=1)
+    if y in hol: notes.append(f"Day after {hol[y]}: the model anchors on yesterday's holiday-level load")
+    if day - pd.Timedelta(days=2) in hol and y not in hol:
+        notes.append(f"Two days after {hol[day - pd.Timedelta(days=2)]}")
+    if r.min_temp <= 0: notes.append(f"Freezing: low of {r.min_temp:.0f} °C")
+    if r.max_temp >= 37: notes.append(f"Extreme heat: high of {r.max_temp:.0f} °C")
+    if r.max_swing >= 8: notes.append(f"Temperature swung up to {r.max_swing:.0f} °C from the day before")
+    return "; ".join(notes) or "No clear driver in our data"
+
+worst["weekday"] = worst.index.day_name()
+worst["direction"] = np.where(worst.mean_error_gw > 0, "over-forecast", "under-forecast")
+worst["context"] = [context(day, r) for day, r in worst.iterrows()]
+worst = worst.reset_index()[["local_date", "weekday", "our_mape", "ercot_mape", "direction", "worst_hour_ending",
+                             "worst_hour_error_gw", "min_temp", "max_temp", "max_swing", "context"]].round(1)
+worst["local_date"] = worst.local_date.dt.date
+worst.to_csv("data/clean/biggest_misses.csv", index=False)
+worst'''),
 ])
 print("built")

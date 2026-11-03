@@ -1,0 +1,5 @@
+,RMSE (MWh),MAPE (%)
+"ERCOT 9:30 am posting, in-use model (ERCOT API)",1810.3,2.38
+ERCOT day-ahead forecast (EIA-930 copy),1756.62,2.31
+Ours: Gradient boosting (change vs yesterday),2189.8,2.94
+Baseline: same hour last week,6482.33,8.53

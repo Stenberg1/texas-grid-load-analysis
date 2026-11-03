@@ -6,3 +6,4 @@ data/raw/*.parquet
 data/*.duckdb
 data/*.duckdb.wal
 .DS_Store
+data/raw/ercot_cache/
