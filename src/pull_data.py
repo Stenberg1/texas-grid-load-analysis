@@ -8,7 +8,12 @@ Writes:
     data/raw/ercot_demand.parquet      period, demand_mwh
     data/raw/ercot_generation.parquet  period, fueltype, generation_mwh
     data/raw/weather.parquet           period, city, temp_c
+    data/raw/ercot_forecast.parquet    period, forecast_mwh   (ERCOT's day-ahead forecast, via EIA-930)
+    data/raw/ercot_zone_load.parquet   period, zone, demand_mwh (8 ERCOT weather zones)
+    data/raw/henry_hub.parquet         date, price_usd_mmbtu  (daily spot)
 All timestamps are UTC.
+
+Run everything, or name parts: python src/pull_data.py weather gas forecast zones
 """
 import os
 import time
@@ -27,6 +32,10 @@ CITIES = {
     "Houston": (29.76, -95.37),
     "Austin": (30.27, -97.74),
     "San Antonio": (29.42, -98.49),
+    "Corpus Christi": (27.80, -97.40),
+    "Midland": (32.00, -102.08),
+    "Lubbock": (33.58, -101.85),
+    "Tyler": (32.35, -95.30),
 }
 
 
@@ -55,13 +64,13 @@ def get_json(url, params, tries=5):
             time.sleep(wait)
 
 
-def eia_paginate(url, extra_params):
+def eia_paginate(url, extra_params, frequency="hourly", start=START, end=END):
     params = {
         "api_key": eia_key(),
-        "frequency": "hourly",
+        "frequency": frequency,
         "data[0]": "value",
-        "start": START,
-        "end": END,
+        "start": start,
+        "end": end,
         "sort[0][column]": "period",
         "sort[0][direction]": "asc",
         "length": PAGE,
@@ -137,8 +146,61 @@ def pull_weather():
     print(f"weather: {len(out):,} rows")
 
 
+def pull_forecast():
+    """ERCOT's own day-ahead demand forecast, as submitted to EIA (Form EIA-930, type DF)."""
+    df = eia_paginate(
+        "https://api.eia.gov/v2/electricity/rto/region-data/data/",
+        {"facets[respondent][]": "ERCO", "facets[type][]": "DF"},
+    )
+    out = pd.DataFrame({
+        "period": to_utc(df["period"]),
+        "forecast_mwh": pd.to_numeric(df["value"], errors="coerce"),
+    })
+    out.to_parquet(RAW / "ercot_forecast.parquet", index=False)
+    print(f"forecast: {len(out):,} rows, {out.period.min()} -> {out.period.max()}")
+
+
+def pull_zone_load():
+    """Hourly load for ERCOT's 8 weather zones (available from 2019-05-27)."""
+    df = eia_paginate(
+        "https://api.eia.gov/v2/electricity/rto/region-sub-ba-data/data/",
+        {"facets[parent][]": "ERCO"},
+    )
+    out = pd.DataFrame({
+        "period": to_utc(df["period"]),
+        "zone": df["subba"],
+        "demand_mwh": pd.to_numeric(df["value"], errors="coerce"),
+    })
+    out.to_parquet(RAW / "ercot_zone_load.parquet", index=False)
+    print(f"zone load: {len(out):,} rows, zones={sorted(out.zone.unique())}")
+
+
+def pull_henry_hub():
+    """Daily Henry Hub natural gas spot price, $/MMBtu (EIA series RNGWHHD)."""
+    df = eia_paginate(
+        "https://api.eia.gov/v2/natural-gas/pri/fut/data/",
+        {"facets[series][]": "RNGWHHD"},
+        frequency="daily", start=START[:10], end=END[:10],
+    )
+    out = pd.DataFrame({
+        "date": pd.to_datetime(df["period"]).dt.date,
+        "price_usd_mmbtu": pd.to_numeric(df["value"], errors="coerce"),
+    })
+    out.to_parquet(RAW / "henry_hub.parquet", index=False)
+    print(f"henry hub: {len(out):,} days, {out.date.min()} -> {out.date.max()}")
+
+
+PARTS = {
+    "demand": pull_demand,
+    "generation": pull_generation,
+    "weather": pull_weather,
+    "forecast": pull_forecast,
+    "zones": pull_zone_load,
+    "gas": pull_henry_hub,
+}
+
 if __name__ == "__main__":
+    import sys
     RAW.mkdir(parents=True, exist_ok=True)
-    pull_demand()
-    pull_generation()
-    pull_weather()
+    for name in sys.argv[1:] or PARTS:
+        PARTS[name]()

@@ -1,4 +1,4 @@
-"""Builds the three project notebooks from cell lists."""
+"""Builds the project notebooks from cell lists. Usage: python src/build_notebooks.py notebooks"""
 import sys
 from pathlib import Path
 
@@ -82,6 +82,13 @@ uri = {
     "storm-week wind vs baseline %": round(100 * (u.wind_mwh.mean() / u.base_wind.mean() - 1), 1),
     "missing hours in storm week": int(u.demand_mwh.isna().sum() + u.total_gen_mwh.isna().sum()),
 }
+outage = u[(u.local_date >= pd.Timestamp("2021-02-15")) & (u.local_date <= pd.Timestamp("2021-02-18"))]
+uri.update({
+    "ERCOT forecast peak during outages MWh": outage.ercot_forecast_mwh.max(),
+    "max hourly forecast minus served MWh": outage.forecast_minus_served.max(),
+    "hour of max gap (local)": outage.loc[outage.forecast_minus_served.idxmax(), "local_ts"],
+    "forecast minus served, Feb 15-18 total GWh": round(outage.forecast_minus_served.sum() / 1000),
+})
 pd.Series(uri, dtype=object)'''),
     ("md", "## Views and performance (sql/08_views.sql)"),
     ("code", 'for v in ["daily_peak", "fuel_mix_yearly", "net_load_hourly"]:\n    display(q(f"SELECT * FROM {v} LIMIT 5"))'),
@@ -104,8 +111,9 @@ timings'''),
 build("02_model.ipynb", [
     ("md", """# 02 · Day-ahead load forecast
 **Forecast definition:** predict each hour's ERCOT demand one day ahead. Every feature must be known a day earlier: calendar fields, demand lags of 24 h and 168 h, and temperature.
-**Limitation:** temperature is *observed* temperature standing in for a day-ahead weather forecast, so real-world error would be somewhat higher.
-**Split:** train 2019–2023, test 2024–2025 (by time, never random)."""),
+**Temperature:** load-weighted average of 8 Texas cities (weights = each ERCOT weather zone's share of 2019–2023 load).
+**Limitation:** temperature is *observed* temperature standing in for a day-ahead weather forecast, so our error is optimistic. ERCOT's own forecast, which we compare against, had to use real weather forecasts.
+**Split:** train 2019–2023, test 2024–2025 (by time, never random). The temperature definition is chosen on a 2023 validation year, never on the test set."""),
     ("code", SETUP),
     ("code", '''df = q("SELECT * FROM model_hourly ORDER BY period")
 df = df.iloc[168:].copy()          # first 168 rows have no lag_168
@@ -127,6 +135,27 @@ LAGS = ["demand_lag_24", "demand_lag_168"]
 CAL = ["local_hour", "day_of_week", "month"]
 BASE_FEATURES = TEMP + FLAGS + LAGS + CAL
 FINAL_FEATURES = BASE_FEATURES + ["temp_delta_24"]'''),
+    ("md", "## Which temperature? (validation: train 2019–2022, validate 2023)"),
+    ("code", '''from sklearn.ensemble import HistGradientBoostingRegressor
+def temp_features(d, col):
+    d = d.copy()
+    d["avg_temp_c"] = d[col]
+    d["cooling_degree"] = (d.avg_temp_c - 18.3).clip(lower=0)
+    d["heating_degree"] = (18.3 - d.avg_temp_c).clip(lower=0)
+    d["temp_sq"] = d.avg_temp_c ** 2
+    d["temp_delta_24"] = d.avg_temp_c - d[col].shift(24)
+    return d.dropna(subset=["temp_delta_24"])
+
+rows = {}
+for col, label in [("temp_4city_c", "4 cities, simple average"),
+                   ("temp_8city_simple_c", "8 cities, simple average"),
+                   ("avg_temp_c", "8 cities, load-weighted (used)")]:
+    d = temp_features(df, col)
+    tr, va = d[d.period.dt.year <= 2022], d[d.period.dt.year == 2023]
+    m = HistGradientBoostingRegressor(random_state=0).fit(tr[FINAL_FEATURES], tr.demand_mwh - tr.demand_lag_24)
+    e = va.demand_mwh - (va.demand_lag_24 + m.predict(va[FINAL_FEATURES]))
+    rows[label] = {"RMSE (MWh)": round(np.sqrt((e ** 2).mean())), "MAPE (%)": round(100 * (e.abs() / va.demand_mwh).mean(), 2)}
+pd.DataFrame(rows).T'''),
     ("md", "## Models"),
     ("code", '''import statsmodels.api as sm
 from sklearn.ensemble import HistGradientBoostingRegressor
@@ -134,6 +163,11 @@ from sklearn.ensemble import HistGradientBoostingRegressor
 def metrics(y, p):
     e = y - p
     return {"RMSE (MWh)": np.sqrt((e ** 2).mean()), "MAPE (%)": 100 * (e.abs() / y).mean()}
+
+# Compare every model on the same hours: drop the 48 test hours with no ERCOT forecast (Dec 5-7 2025)
+n_before = len(test)
+test = test[test.ercot_forecast_mwh.notna()].copy()
+print(f"test rows used: {len(test):,} (dropped {n_before - len(test)} with no ERCOT forecast)")
 
 preds = {}
 # 1. Baseline: same hour one week earlier
@@ -166,21 +200,38 @@ gb = HistGradientBoostingRegressor(random_state=0).fit(
     train_ols[FINAL_FEATURES], train_ols.demand_mwh - train_ols.demand_lag_24)
 preds["Gradient boosting (change vs yesterday)"] = test.demand_lag_24 + gb.predict(test[FINAL_FEATURES])
 
+# 4. The grid operator's own day-ahead forecast (ERCOT, as filed with EIA on Form EIA-930)
+preds["ERCOT official day-ahead forecast"] = test.ercot_forecast_mwh
+
 results = pd.DataFrame({k: metrics(test.demand_mwh, v) for k, v in preds.items()}).T.round(2)
 results["RMSE (MWh)"] = results["RMSE (MWh)"].round(0).astype(int)
 results'''),
-    ("code", '''best_name = results["MAPE (%)"].idxmin()
-print("best model:", best_name)
+    ("code", '''ours = [k for k in results.index if not k.startswith(("Baseline", "Reference", "ERCOT"))]
+best_name = results.loc[ours, "MAPE (%)"].idxmin()
+print("best model of ours:", best_name)
 test["pred_best"] = preds[best_name]
 test["pred_baseline"] = preds["Baseline: same hour last week"]
 test["ape_best"] = 100 * (test.demand_mwh - test.pred_best).abs() / test.demand_mwh
 test["ape_baseline"] = 100 * (test.demand_mwh - test.pred_baseline).abs() / test.demand_mwh
+test["ape_ercot"] = 100 * (test.demand_mwh - test.ercot_forecast_mwh).abs() / test.demand_mwh
 results.to_csv("data/clean/model_results.csv")
 test[["period", "local_ts", "local_hour", "season", "is_holiday", "demand_mwh", "avg_temp_c",
-      "pred_best", "pred_baseline", "ape_best", "ape_baseline"]].to_parquet("data/clean/test_predictions.parquet", index=False)'''),
+      "pred_best", "pred_baseline", "ercot_forecast_mwh", "ape_best", "ape_baseline", "ape_ercot"]].to_parquet("data/clean/test_predictions.parquet", index=False)'''),
+    ("md", "## Our model vs ERCOT, head to head"),
+    ("code", '''daily = test.groupby(test.local_ts.dt.date).agg(ours=("ape_best", "mean"), ercot=("ape_ercot", "mean"),
+                                                min_temp=("avg_temp_c", "min"), max_temp=("avg_temp_c", "max"))
+print(f"days where our model beats ERCOT: {100 * (daily.ours < daily.ercot).mean():.1f}% of {len(daily)}")
+print(f"hours where our model beats ERCOT: {100 * (test.ape_best < test.ape_ercot).mean():.1f}%")
+print(f"bias (forecast - actual): ERCOT {(test.ercot_forecast_mwh - test.demand_mwh).mean():+.0f} MWh, ours {(test.pred_best - test.demand_mwh).mean():+.0f} MWh")
+display(test.groupby(test.period.dt.year)[["ape_best", "ape_ercot"]].mean().round(2))
+gap = daily.assign(gap=daily.ours - daily.ercot)
+print("Days ERCOT beat us by the most:")
+display(gap.sort_values("gap", ascending=False).head(5).round(1))
+print("Days we beat ERCOT by the most:")
+gap.sort_values("gap").head(5).round(1)'''),
     ("md", "## Where does it fail?"),
-    ("code", '''by_hour = test.groupby("local_hour")[["ape_best", "ape_baseline"]].mean().round(2)
-by_season = test.groupby("season")[["ape_best", "ape_baseline"]].mean().round(2).loc[["Winter", "Spring", "Summer", "Fall"]]
+    ("code", '''by_hour = test.groupby("local_hour")[["ape_best", "ape_baseline", "ape_ercot"]].mean().round(2)
+by_season = test.groupby("season")[["ape_best", "ape_baseline", "ape_ercot"]].mean().round(2).loc[["Winter", "Spring", "Summer", "Fall"]]
 display(by_season); by_hour.T'''),
     ("code", '''print("holiday vs non-holiday MAPE (best model):")
 display(test.groupby("is_holiday").ape_best.mean().round(2))
@@ -192,11 +243,11 @@ worst_days'''),
     ("code", '''import plotly.graph_objects as go
 from viz import add_caption, save, SERIES
 fig = go.Figure()
-for i, (col, name) in enumerate([("ape_baseline", "Baseline (last week)"), ("ape_best", best_name)]):
+for i, (col, name) in enumerate([("ape_baseline", "Baseline (last week)"), ("ape_best", best_name), ("ape_ercot", "ERCOT official forecast")]):
     fig.add_bar(x=by_season.index, y=by_season[col], name=name, marker_color=SERIES[i])
 fig.update_layout(title="Forecast error by season, test set 2024–2025", barmode="group", bargap=0.35, bargroupgap=0.08,
                   yaxis_title="Mean absolute % error", xaxis_title="Season")
-add_caption(fig, f"Error is highest in winter for both models: cold snaps (and holidays such as MLK Day during them) are the hardest days to forecast.")
+add_caption(fig, "Winter is the hardest season for every forecast: cold snaps (and holidays such as MLK Day during them) drive the biggest misses.")
 save(fig, "model_error_by_season")'''),
 ])
 
@@ -221,7 +272,7 @@ fig.add_annotation(x=low.t, y=low.demand_mwh / 1000, text=f"Lowest average load 
 fig.add_annotation(x=-11, y=47, text="Below −9 °C: Uri hours,<br>load shed, not true demand", showarrow=False,
                    xanchor="center", yanchor="top", yshift=-14, font=dict(color=INK_2, size=12))
 fig.update_layout(title="ERCOT hourly load vs temperature, 2019–2025",
-                  xaxis_title="Average temperature, 4 Texas metros (°C)", yaxis_title="Hourly load (GW)")
+                  xaxis_title="Load-weighted temperature, 8 Texas cities (°C)", yaxis_title="Hourly load (GW)")
 add_caption(fig, "Load is U-shaped in temperature: it bottoms out in mild weather and climbs fastest in summer heat.")
 save(fig, "load_vs_temperature")'''),
     ("md", "## 2. Midday solar share by year"),
@@ -259,13 +310,13 @@ for i, (yr, g) in enumerate(n.groupby("year")):
 r25 = n[n.year == 2025].set_index("local_hour").net_gw
 fig.add_annotation(x=r25.idxmin(), y=r25.min(), text=f"2025 midday trough {r25.min():.0f} GW", showarrow=True, ay=40, arrowcolor=INK_2, font=dict(color=INK))
 fig.update_layout(title="The duck curve: average spring-day net load (demand minus wind and solar)",
-                  xaxis_title="Hour of day (Central time)", yaxis_title="Net load (GW)", xaxis=dict(dtick=3, range=[0, 24.5]))
+                  xaxis_title="Hour ending (Central time)", yaxis_title="Net load (GW)", xaxis=dict(dtick=3, range=[0, 24.5]))
 ramp = q("SELECT * FROM evening_ramp_yearly")
 add_caption(fig, f"Midday net load has sunk as solar grew; the average evening 3-hour ramp rose from {ramp.avg_daily_max_ramp_mwh.iloc[0]/1000:.1f} GW (2019) to {ramp.avg_daily_max_ramp_mwh.iloc[-1]/1000:.1f} GW (2025).")
 save(fig, "duck_curve")'''),
     ("md", "## 5. Winter Storm Uri"),
     ("code", '''u = q("""SELECT local_ts, demand_mwh, gas_mwh, coal_mwh, nuclear_mwh, wind_mwh, solar_mwh,
-                COALESCE(hydro_mwh,0) + COALESCE(other_mwh,0) AS other_mwh, avg_temp_c
+                COALESCE(hydro_mwh,0) + COALESCE(other_mwh,0) AS other_mwh, avg_temp_c, ercot_forecast_mwh
          FROM model_hourly WHERE local_date BETWEEN DATE '2021-02-11' AND DATE '2021-02-21' ORDER BY period""")
 fig = go.Figure()
 stack = [("Nuclear", "nuclear_mwh"), ("Coal", "coal_mwh"), ("Gas", "gas_mwh"), ("Wind", "wind_mwh"), ("Solar", "solar_mwh"), ("Other", "other_mwh")]
@@ -273,6 +324,8 @@ for name, col in stack:
     fig.add_scatter(x=u.local_ts, y=u[col] / 1000, name=name, stackgroup="gen", mode="lines",
                     line=dict(width=0.5, color="#fcfcfb"), fillcolor=FUEL_COLORS[name],
                     hovertemplate=f"{name}: %{{y:.1f}} GW<extra></extra>")
+fig.add_scatter(x=u.local_ts, y=u.ercot_forecast_mwh / 1000, name="ERCOT day-ahead forecast", mode="lines",
+                line=dict(color=INK, width=2, dash="dot"), hovertemplate="ERCOT forecast: %{y:.1f} GW<extra></extra>")
 fig.add_scatter(x=u.local_ts, y=u.demand_mwh / 1000, name="Served demand", mode="lines",
                 line=dict(color=INK, width=2.5), hovertemplate="Demand: %{y:.1f} GW<extra></extra>")
 pk = u.loc[u.demand_mwh.idxmax()]
@@ -285,23 +338,81 @@ for name, col in [("Nuclear", "nuclear_mwh"), ("Coal", "coal_mwh"), ("Gas", "gas
     y = (mid[[c for _, c in stack][:[c for _, c in stack].index(col) + 1]].sum() - mid[col] / 2) / 1000
     fig.add_annotation(x=mid.local_ts, y=y, text=name, showarrow=False, font=dict(color="white", size=13))
 fig.update_layout(title="Winter Storm Uri, Feb 11–21 2021: ERCOT generation by fuel vs demand",
-                  xaxis_title="Date (Central time)", yaxis_title="Hourly energy (GW)", yaxis=dict(range=[0, 80]))
-add_caption(fig, "Generation fell nearly 40% from its Feb 14 evening peak as gas, coal, nuclear and wind failed; recorded demand fell with it because load was shed.")
+                  xaxis_title="Date (Central time)", yaxis_title="Hourly energy (GW)", yaxis=dict(range=[0, 85]))
+out = u[(u.local_ts >= "2021-02-15") & (u.local_ts < "2021-02-19")]
+gap = (out.ercot_forecast_mwh - out.demand_mwh).clip(lower=0)
+add_caption(fig, f"Generation fell nearly 40% after the Feb 14 peak. ERCOT's own forecast ran up to {gap.max()/1000:.0f} GW above served demand, an upper bound on load shed.")
 save(fig, "uri_week")'''),
     ("md", "## 6. Model error by hour of day"),
     ("code", '''t = pd.read_parquet("data/clean/test_predictions.parquet")
 res = pd.read_csv("data/clean/model_results.csv", index_col=0)
-best = res["MAPE (%)"].idxmin()
-h = t.groupby("local_hour")[["ape_baseline", "ape_best"]].mean()
+ours = [k for k in res.index if not k.startswith(("Baseline", "Reference", "ERCOT"))]
+best = res.loc[ours, "MAPE (%)"].idxmin()
+h = t.groupby("local_hour")[["ape_baseline", "ape_best", "ape_ercot"]].mean()
 fig = go.Figure()
-for i, (col, name, short) in enumerate([("ape_baseline", "Baseline: same hour last week", "Baseline"), ("ape_best", best, "Best model")]):
+for i, (col, name, short) in enumerate([("ape_baseline", "Baseline: same hour last week", "Baseline"), ("ape_best", best, "Our model"),
+                                        ("ape_ercot", "ERCOT official day-ahead forecast", "ERCOT")]):
     fig.add_scatter(x=h.index, y=h[col], mode="lines+markers", name=name, line=dict(color=SERIES[i], width=2.5),
                     marker=dict(size=8), hovertemplate=f"{short} · %{{x}}:00<br>%{{y:.2f}}%<extra></extra>")
     fig.add_annotation(x=23, y=h[col].iloc[-1], text=short, showarrow=False, xanchor="left", xshift=8, font=dict(color=INK))
 fig.update_layout(title="Day-ahead forecast error by hour of day, test set 2024–2025",
-                  xaxis_title="Hour of day (Central time)", yaxis_title="Mean absolute % error",
+                  xaxis_title="Hour ending (Central time)", yaxis_title="Mean absolute % error",
                   yaxis=dict(rangemode="tozero"), xaxis=dict(dtick=3, range=[-0.5, 25]))
-add_caption(fig, f"The best model cuts error from {res.loc['Baseline: same hour last week','MAPE (%)']:.1f}% to {res.loc[best,'MAPE (%)']:.1f}%; its weakest hours are the 5–10 pm evening peak.")
+add_caption(fig, f"Our model cuts the baseline's {res.loc['Baseline: same hour last week','MAPE (%)']:.1f}% error to {res.loc[best,'MAPE (%)']:.1f}%; ERCOT's official forecast does better still at {res.loc['ERCOT official day-ahead forecast','MAPE (%)']:.1f}%.")
 save(fig, "model_error_by_hour")'''),
+])
+# ---------------------------------------------------------------- 04 gas prices
+GAS_INTRO = """# 04 · Gas prices and the generation mix
+**Question:** when natural gas gets expensive, how much does ERCOT shift from gas to coal?
+
+Gas and coal compete for the load left after wind, solar and nuclear, so the outcome is
+**gas share of fossil generation** = gas / (gas + coal), by day. Price is the daily Henry Hub spot
+(weekends and holidays carry the last trading day's price via an ASOF join).
+Uri (Feb 10–20 2021) is excluded: prices spiked to $23.86 while plants were failing, which is not economic dispatch."""
+
+GAS_REG_MD = """## Controlled regression
+Raw comparisons are confounded: gas prices run high in cold snaps and heat waves, exactly when coal is already running flat out.
+So regress gas share of fossil on log price, controlling for net load (and its square), month and year.
+Standard errors are Newey-West (HAC, 7 lags) because neighbouring days are correlated."""
+
+build("04_gas_prices.ipynb", [
+    ("md", GAS_INTRO),
+    ("code", SETUP),
+    ("code", 'q("SELECT * FROM gas_price_quintiles")'),
+    ("code", 'q("SELECT * FROM gas_price_by_year")'),
+    ("md", GAS_REG_MD),
+    ("code", '''import statsmodels.formula.api as smf
+d = q("SELECT * FROM gas_daily WHERE NOT is_uri")
+d["log_p"] = np.log(d.henry_hub_usd)
+d["nl_gw"] = d.net_load_mwh / 24 / 1000
+LN2 = np.log(2)
+pooled = smf.ols("gas_fossil_share_pct ~ log_p + nl_gw + I(nl_gw**2) + C(month) + C(year)", d).fit(
+    cov_type="HAC", cov_kwds={"maxlags": 7})
+b, se = pooled.params["log_p"] * LN2, pooled.bse["log_p"] * LN2
+print(f"Doubling Henry Hub shifts gas share of fossil generation by {b:+.2f} pts "
+      f"(95% CI {b - 1.96 * se:+.2f} to {b + 1.96 * se:+.2f}); R^2 {pooled.rsquared:.2f}")
+print(f"Average gas share of fossil generation: {d.gas_fossil_share_pct.mean():.1f}%")'''),
+    ("code", '''rows = []
+for yr, g in d.groupby("year"):
+    m = smf.ols("gas_fossil_share_pct ~ log_p + nl_gw + I(nl_gw**2) + C(month)", g).fit(
+        cov_type="HAC", cov_kwds={"maxlags": 7})
+    rows.append({"year": yr, "shift_per_doubling_pts": m.params["log_p"] * LN2, "ci95": 1.96 * m.bse["log_p"] * LN2,
+                 "price_min": g.henry_hub_usd.min(), "price_max": g.henry_hub_usd.max(),
+                 "gas_fossil_share_pct": g.gas_fossil_share_pct.mean(), "coal_share_pct": g.coal_share_pct.mean(),
+                 "days": len(g)})
+by_year = pd.DataFrame(rows).round(2)
+by_year.to_csv("data/clean/gas_switching_by_year.csv", index=False)
+by_year'''),
+    ("code", '''import plotly.graph_objects as go
+from viz import add_caption, save, SERIES, INK_2
+fig = go.Figure(go.Bar(x=by_year.year, y=by_year.shift_per_doubling_pts, marker_color=SERIES[0], name="Shift per doubling",
+                       error_y=dict(type="data", array=by_year.ci95, color=INK_2, thickness=1.5, width=6),
+                       hovertemplate="%{x}: %{y:+.1f} pts<extra></extra>"))
+fig.add_hline(y=0, line=dict(color=INK_2, width=1))
+fig.update_layout(title="How much gas loses to coal when gas prices double, by year", bargap=0.45,
+                  xaxis_title="Year", yaxis_title="Change in gas share of fossil generation (pts)", xaxis=dict(dtick=1))
+first, late = by_year.iloc[0], by_year[by_year.year >= 2022]
+add_caption(fig, f"Fuel switching has faded: {first.shift_per_doubling_pts:+.1f} pts per doubling in {int(first.year)}, {late.shift_per_doubling_pts.min():+.1f} to {late.shift_per_doubling_pts.max():+.1f} since 2022 as coal shrank. Pooled: {b:+.1f} pts. Bars: 95% CI.")
+save(fig, "gas_price_switching")'''),
 ])
 print("built")

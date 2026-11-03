@@ -31,17 +31,21 @@ def main():
         con.execute(f.read_text()).fetchall()
 
     print("\nRow counts")
-    for t in ["raw_demand", "raw_generation", "raw_weather", "dim_fuel", "dim_calendar",
-              "fact_load", "fact_generation", "fact_weather", "model_hourly"]:
+    for t in ["raw_demand", "raw_generation", "raw_weather", "raw_forecast", "raw_zone_load",
+              "raw_henry_hub", "dim_fuel", "dim_city", "dim_calendar", "fact_load", "fact_generation",
+              "fact_weather", "fact_forecast", "fact_zone_load", "fact_gas_price", "model_hourly"]:
         print(f"  {t:16s} {con.execute(f'SELECT COUNT(*) FROM {t}').fetchall()[0][0]:>9,}")
 
     print("\nParquet row counts")
-    for p in ["ercot_demand", "ercot_generation", "weather"]:
+    for p in ["ercot_demand", "ercot_generation", "weather", "ercot_forecast", "ercot_zone_load", "henry_hub"]:
         n = con.execute(f"SELECT COUNT(*) FROM 'data/raw/{p}.parquet'").fetchall()[0][0]
         print(f"  {p:16s} {n:>9,}")
 
     print("\nQuality summary")
     print(con.sql("SELECT * FROM qa_summary"))
+
+    print("City temperature weights")
+    print(con.sql("SELECT city, zone, ROUND(weight, 3) AS weight FROM dim_city_weight ORDER BY weight DESC"))
 
     print("View checks")
     for v in ["daily_peak", "fuel_mix_yearly", "net_load_hourly"]:
