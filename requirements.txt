@@ -9,3 +9,4 @@ holidays
 kaleido
 jupyter
 python-dotenv
+pytz

@@ -1,0 +1,6 @@
+,RMSE (MWh),MAPE (%)
+Baseline: same hour last week,6480,8.53
+Reference: same hour yesterday,3503,4.52
+Linear regression (OLS),3623,5.55
+Gradient boosting (default),3834,5.77
+Gradient boosting (change vs yesterday),2187,2.94
