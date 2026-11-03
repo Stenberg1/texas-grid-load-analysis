@@ -1,0 +1,11 @@
+pandas
+duckdb
+statsmodels
+scikit-learn
+plotly
+requests
+pyarrow
+holidays
+kaleido
+jupyter
+python-dotenv
