@@ -3,5 +3,5 @@ Baseline: same hour last week,6481,8.52
 Reference: same hour yesterday,3500,4.51
 Linear regression (OLS),3604,5.56
 Gradient boosting (default),3733,5.7
-Gradient boosting (change vs yesterday),2190,2.94
+Gradient boosting (change vs yesterday),1971,2.52
 ERCOT official day-ahead forecast,1756,2.31

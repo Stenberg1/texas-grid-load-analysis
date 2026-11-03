@@ -1,4 +1,4 @@
 ,MAPE 2025 (%),weight on ours (fit on 2024)
 "ERCOT alone (API, in-use)",2.53,
-Ours alone,3.07,
-Blend: 0.35 ours + 0.65 ERCOT,1.94,0.35
+Ours alone,2.41,
+Blend: 0.40 ours + 0.60 ERCOT,2.06,0.4

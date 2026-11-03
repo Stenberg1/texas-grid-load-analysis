@@ -1,11 +1,11 @@
 local_date,weekday,our_mape,ercot_mape,direction,worst_hour_ending,worst_hour_error_gw,min_temp,max_temp,max_swing,context
-2024-01-15,Monday,16.3,4.8,under-forecast,8.0,-23.0,-7.1,0.8,7.6,Holiday: Martin Luther King Jr. Day; Freezing: low of -7 °C
-2024-07-08,Monday,12.8,15.4,over-forecast,17.0,12.6,24.6,28.9,4.0,Hurricane Beryl made landfall near Houston; about 2.2 million customers lost power
-2025-01-20,Monday,11.6,2.8,under-forecast,18.0,-12.1,-4.0,2.2,4.8,Holiday: Martin Luther King Jr. Day; Freezing: low of -4 °C
-2024-01-16,Tuesday,10.9,4.6,under-forecast,5.0,-15.7,-8.9,-0.7,3.5,Day after Martin Luther King Jr. Day: the model anchors on yesterday's holiday-level load; Freezing: low of -9 °C
-2025-03-08,Saturday,10.1,2.3,under-forecast,17.0,-9.9,10.8,21.0,7.6,No clear driver in our data
-2025-01-02,Thursday,10.0,1.8,under-forecast,9.0,-6.7,6.2,16.3,4.0,Day after New Year's Day: the model anchors on yesterday's holiday-level load
-2025-11-29,Saturday,9.1,1.0,under-forecast,17.0,-5.8,13.3,22.1,6.3,Two days after Thanksgiving Day
-2024-01-14,Sunday,8.6,3.6,under-forecast,18.0,-12.0,-4.7,2.7,13.7,Freezing: low of -5 °C; Temperature swung up to 14 °C from the day before
-2025-02-14,Friday,8.4,4.7,under-forecast,15.0,-7.3,3.8,12.7,7.0,No clear driver in our data
-2025-11-11,Tuesday,8.4,5.7,under-forecast,9.0,-6.6,5.8,22.1,7.4,Holiday: Veterans Day
+2024-07-08,Monday,14.9,15.4,over-forecast,12.0,14.2,24.6,28.9,4.0,Hurricane Beryl made landfall near Houston; about 2.2 million customers lost power
+2024-01-15,Monday,14.3,4.8,under-forecast,7.0,-22.9,-7.1,0.8,7.6,Holiday: Martin Luther King Jr. Day; Freezing: low of -7 °C
+2024-01-18,Thursday,13.8,7.0,over-forecast,21.0,8.7,4.8,17.5,12.2,Temperature swung up to 12 °C from the day before
+2024-11-05,Tuesday,10.1,2.2,over-forecast,12.0,8.6,14.8,21.8,7.1,No clear driver in our data
+2024-01-19,Friday,9.3,6.5,over-forecast,5.0,8.8,-0.4,7.0,11.7,Freezing: low of -0 °C; Temperature swung up to 12 °C from the day before
+2024-11-01,Friday,9.2,2.7,over-forecast,17.0,7.5,18.6,26.2,4.4,No clear driver in our data
+2025-01-20,Monday,9.1,2.8,under-forecast,18.0,-10.9,-4.0,2.2,4.8,Holiday: Martin Luther King Jr. Day; Freezing: low of -4 °C
+2025-01-02,Thursday,8.8,1.8,under-forecast,10.0,-6.5,6.2,16.3,4.0,Day after New Year's Day: the model anchors on yesterday's holiday-level load
+2025-05-26,Monday,8.5,7.8,over-forecast,16.0,7.8,22.3,27.0,8.0,Holiday: Memorial Day
+2025-06-13,Friday,8.4,2.6,under-forecast,20.0,-11.0,22.5,30.3,4.3,No clear driver in our data

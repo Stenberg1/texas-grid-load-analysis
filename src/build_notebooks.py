@@ -134,7 +134,11 @@ FLAGS = ["is_weekend", "is_holiday"]
 LAGS = ["demand_lag_24", "demand_lag_168"]
 CAL = ["local_hour", "day_of_week", "month"]
 BASE_FEATURES = TEMP + FLAGS + LAGS + CAL
-FINAL_FEATURES = BASE_FEATURES + ["temp_delta_24"]'''),
+# The change-vs-yesterday model gets NO load-level inputs: yesterday's load is only the anchor that the
+# predicted change is added to. With levels as inputs, the model learned 2019-23 mean reversion ("high load
+# days are followed by drops") and, with load now permanently higher, under-forecast 2024-25 by ~1,000 MWh.
+# Dropping them was chosen on the 2023 validation year (MAPE 2.92% -> 2.65%), not on the test set.
+FINAL_FEATURES = TEMP + FLAGS + CAL + ["temp_delta_24"]'''),
     ("md", "## Which temperature? (validation: train 2019–2022, validate 2023)"),
     ("code", '''from sklearn.ensemble import HistGradientBoostingRegressor
 def temp_features(d, col):
@@ -309,29 +313,7 @@ fig.update_layout(title="ERCOT hourly load vs temperature, 2019–2025",
                   xaxis_title="Load-weighted temperature, 8 Texas cities (°C)", yaxis_title="Hourly load (GW)")
 add_caption(fig, "Load is U-shaped in temperature: it bottoms out in mild weather and climbs fastest in summer heat.")
 save(fig, "load_vs_temperature")'''),
-    ("md", "## 2. Midday solar share by year"),
-    ("code", '''s = q("SELECT * FROM midday_solar_share")
-fig = go.Figure(go.Bar(x=s.year, y=s.midday_solar_pct, marker_color=SERIES[0], name="Midday solar share",
-                       text=[f"{v:.1f}%" if y in (s.year.min(), s.year.max()) else "" for y, v in zip(s.year, s.midday_solar_pct)],
-                       textposition="outside", textfont=dict(color=INK),
-                       hovertemplate="%{x}: %{y:.1f}%<extra></extra>"))
-fig.update_layout(title="Solar share of ERCOT generation, 11 am–3 pm local time", bargap=0.45,
-                  xaxis_title="Year", yaxis_title="Share of midday generation (%)", xaxis=dict(dtick=1))
-add_caption(fig, f"Solar went from {s.midday_solar_pct.iloc[0]:.1f}% to {s.midday_solar_pct.iloc[-1]:.1f}% of midday generation between {s.year.iloc[0]} and {s.year.iloc[-1]}.")
-save(fig, "midday_solar_share")'''),
-    ("md", "## 3. Peak load by year"),
-    ("code", '''p = q("SELECT * FROM peak_growth_yearly")
-rec = p.loc[p.peak_mwh.idxmax()]
-fig = go.Figure(go.Bar(x=p.year, y=p.peak_mwh / 1000, marker_color=SERIES[0], name="Annual peak",
-                       text=[f"{v/1000:.1f} GW" if y in (p.year.iloc[0], rec.year) else "" for y, v in zip(p.year, p.peak_mwh)],
-                       textposition="outside", textfont=dict(color=INK),
-                       hovertemplate="%{x}: %{y:.1f} GW<extra></extra>"))
-fig.update_layout(title="ERCOT annual peak hourly load", bargap=0.45, xaxis_title="Year",
-                  yaxis_title="Peak hourly load (GW)", yaxis=dict(range=[0, 95]), xaxis=dict(dtick=1))
-growth = 100 * (rec.peak_mwh / p.peak_mwh.iloc[0] - 1)
-add_caption(fig, f"Peak load rose {growth:.0f}% from {p.year.iloc[0]} to the {int(rec.year)} record of {rec.peak_mwh/1000:.1f} GW, nearly all of it in 2022–2023.")
-save(fig, "peak_load_by_year")'''),
-    ("md", "## 4. Net load and the duck curve\nAverage spring-day (March–May) net load profile, comparing three years."),
+    ("md", "## 2. Net load and the duck curve\nAverage spring-day (March–May) net load profile, comparing three years."),
     ("code", '''n = q("""SELECT year, local_hour, AVG(net_load_mwh) / 1000 AS net_gw
          FROM net_load_hourly WHERE month(local_ts) IN (3, 4, 5) AND year IN (2019, 2022, 2025)
          GROUP BY year, local_hour ORDER BY year, local_hour""")
@@ -348,7 +330,7 @@ fig.update_layout(title="The duck curve: average spring-day net load (demand min
 ramp = q("SELECT * FROM evening_ramp_yearly")
 add_caption(fig, f"Midday net load has sunk as solar grew; the average evening 3-hour ramp rose from {ramp.avg_daily_max_ramp_mwh.iloc[0]/1000:.1f} GW (2019) to {ramp.avg_daily_max_ramp_mwh.iloc[-1]/1000:.1f} GW (2025).")
 save(fig, "duck_curve")'''),
-    ("md", "## 5. Winter Storm Uri"),
+    ("md", "## 3. Winter Storm Uri"),
     ("code", '''u = q("""SELECT local_ts, demand_mwh, gas_mwh, coal_mwh, nuclear_mwh, wind_mwh, solar_mwh,
                 COALESCE(hydro_mwh,0) + COALESCE(other_mwh,0) AS other_mwh, avg_temp_c, ercot_forecast_mwh
          FROM model_hourly WHERE local_date BETWEEN DATE '2021-02-11' AND DATE '2021-02-21' ORDER BY period""")
@@ -377,23 +359,6 @@ out = u[(u.local_ts >= "2021-02-15") & (u.local_ts < "2021-02-19")]
 gap = (out.ercot_forecast_mwh - out.demand_mwh).clip(lower=0)
 add_caption(fig, f"Generation fell nearly 40% after the Feb 14 peak. ERCOT's own forecast ran up to {gap.max()/1000:.0f} GW above served demand, an upper bound on load shed.")
 save(fig, "uri_week")'''),
-    ("md", "## 6. Model error by hour of day"),
-    ("code", '''t = pd.read_parquet("data/clean/test_predictions.parquet")
-res = pd.read_csv("data/clean/model_results.csv", index_col=0)
-ours = [k for k in res.index if not k.startswith(("Baseline", "Reference", "ERCOT"))]
-best = res.loc[ours, "MAPE (%)"].idxmin()
-h = t.groupby("local_hour")[["ape_baseline", "ape_best", "ape_ercot"]].mean()
-fig = go.Figure()
-for i, (col, name, short) in enumerate([("ape_baseline", "Baseline: same hour last week", "Baseline"), ("ape_best", best, "Our model"),
-                                        ("ape_ercot", "ERCOT official day-ahead forecast", "ERCOT")]):
-    fig.add_scatter(x=h.index, y=h[col], mode="lines+markers", name=name, line=dict(color=SERIES[i], width=2.5),
-                    marker=dict(size=8), hovertemplate=f"{short} · %{{x}}:00<br>%{{y:.2f}}%<extra></extra>")
-    fig.add_annotation(x=23, y=h[col].iloc[-1], text=short, showarrow=False, xanchor="left", xshift=8, font=dict(color=INK))
-fig.update_layout(title="Day-ahead forecast error by hour of day, test set 2024–2025",
-                  xaxis_title="Hour ending (Central time)", yaxis_title="Mean absolute % error",
-                  yaxis=dict(rangemode="tozero"), xaxis=dict(dtick=3, range=[-0.5, 25]))
-add_caption(fig, f"Our model cuts the baseline's {res.loc['Baseline: same hour last week','MAPE (%)']:.1f}% error to {res.loc[best,'MAPE (%)']:.1f}%; ERCOT's official forecast does better still at {res.loc['ERCOT official day-ahead forecast','MAPE (%)']:.1f}%.")
-save(fig, "model_error_by_hour")'''),
 ])
 # ---------------------------------------------------------------- 04 gas prices
 GAS_INTRO = """# 04 · Gas prices and the generation mix
@@ -534,7 +499,7 @@ for c in tcols:
 d["is_weekend"] = d.is_weekend.astype(int)
 d["is_holiday"] = d.is_holiday.astype(int)
 d = d.dropna(subset=["demand_lag_168"] + [c + "_lag24" for c in tcols])
-base = ["demand_lag_24", "demand_lag_168", "local_hour", "day_of_week", "month", "is_weekend", "is_holiday"]
+base = ["local_hour", "day_of_week", "month", "is_weekend", "is_holiday"]   # no load-level inputs, as in notebook 02
 feats = base + tcols + [c + "_lag24" for c in tcols]
 tr, te = d[d.period.dt.year <= 2023], d[d.period.dt.year >= 2024]
 gb = HistGradientBoostingRegressor(random_state=0).fit(tr[feats], tr.demand_mwh - tr.demand_lag_24)
@@ -542,11 +507,10 @@ def mape_of(X):
     p = te.demand_lag_24.values + gb.predict(X[feats])   # anchor stays the true value; only model inputs are shuffled
     return 100 * np.mean(np.abs(te.demand_mwh.values - p) / te.demand_mwh.values)
 base_mape = mape_of(te)
-print(f"per-city model, test MAPE: {base_mape:.2f}%  (weighted-average model in notebook 02: 2.94%)")
+print(f"per-city model, test MAPE: {base_mape:.2f}%  (compare the weighted-average model in notebook 02)")
 
 groups = {name_of[c]: [c, c + "_lag24"] for c in tcols}
-groups.update({"Demand 24 h earlier": ["demand_lag_24"], "Demand 1 week earlier": ["demand_lag_168"],
-               "Hour of day": ["local_hour"], "Day of week": ["day_of_week"], "Month": ["month"],
+groups.update({"Hour of day": ["local_hour"], "Day of week": ["day_of_week"], "Month": ["month"],
                "Holiday / weekend": ["is_holiday", "is_weekend"]})
 rng = np.random.default_rng(0)
 rows = []
@@ -573,7 +537,9 @@ fig.update_layout(title="What drives the day-ahead forecast (test set 2024–202
                   xaxis_title="Rise in MAPE when the input is shuffled (percentage points)", yaxis_title="",
                   yaxis=dict(categoryorder="array", categoryarray=list(srt.input)), margin=dict(l=170))
 top_city = imp[imp.is_city].iloc[0]
-add_caption(fig, f"Yesterday's load matters most; among cities, {top_city.input} leads. The four added cities together matter less than Dallas alone.")
+added = imp[imp.input.isin(["Corpus Christi", "Tyler", "Midland", "Lubbock"])].mape_increase_pts.sum()
+dallas = imp.set_index("input").mape_increase_pts["Dallas"]
+add_caption(fig, f"{imp.iloc[0].input} matters most. The four added cities together: {added:.2f} pts, vs Dallas alone: {dallas:.2f} pts. Bars: ±1 sd over 5 shuffles.")
 save(fig, "feature_importance", height=680)'''),
     ("md", """## 3. The model's 10 biggest misses
 Worst days on the test set by daily MAPE for the main model (notebook 02). The context column is generated from the data: holidays, the day after a holiday (the model anchors on yesterday's load), freezing or extreme heat, and big temperature swings from the day before. The one hand-labelled event is Hurricane Beryl."""),
@@ -617,5 +583,71 @@ worst = worst.reset_index()[["local_date", "weekday", "our_mape", "ercot_mape", 
 worst["local_date"] = worst.local_date.dt.date
 worst.to_csv("data/clean/biggest_misses.csv", index=False)
 worst'''),
+    ("md", """## 4. The 6 pm question: do people get home and turn on the heat (or AC)?
+Hour ending 6 pm was the model's worst hour. The theory: on workdays, people get home around 6 pm and switch on heating in winter or AC in summer, so a correction for cold or hot *workday* evenings should help.
+
+The test has to avoid leaking the test set:
+1. **Errors to learn from:** train the model on 2019–2022 and take its errors on 2023 (validation).
+2. **Fit the correction:** regress those 6 pm errors on heating degrees, cooling degrees, a workday flag and their interactions.
+3. **Check it:** apply the correction to the 2024–25 test forecasts and see whether 6 pm error falls.
+
+This analysis also found why 6 pm looked so bad. The original model used yesterday's and last week's load *levels* as inputs. It learned the 2019–23 pattern that high-load days are followed by drops. In 2024–25, load is high every day because of growth, so it under-forecast every hour by about 1,000 MWh, most of all at the evening peak."""),
+    ("code", '''import warnings
+warnings.filterwarnings("ignore")
+from sklearn.ensemble import HistGradientBoostingRegressor
+m6 = df.copy()
+m6["cooling_degree"] = (m6.avg_temp_c - 18.3).clip(lower=0)
+m6["heating_degree"] = (18.3 - m6.avg_temp_c).clip(lower=0)
+m6["temp_sq"] = m6.avg_temp_c ** 2
+m6["temp_delta_24"] = m6.avg_temp_c - m6.temp_lag_24
+m6["is_weekend"] = m6.is_weekend.astype(int)
+m6["is_holiday"] = m6.is_holiday.astype(int)
+m6["workday"] = ((m6.is_weekend == 0) & (m6.is_holiday == 0)).astype(int)
+m6 = m6.dropna(subset=["demand_lag_168", "temp_delta_24"])
+NO_LEVELS = ["avg_temp_c", "cooling_degree", "heating_degree", "temp_sq", "is_weekend", "is_holiday",
+             "local_hour", "day_of_week", "month", "temp_delta_24"]
+WITH_LEVELS = NO_LEVELS + ["demand_lag_24", "demand_lag_168"]
+yr = m6.period.dt.year
+
+def residuals(feats, train_to, target_years):
+    tr, tg = m6[yr <= train_to], m6[yr.isin(target_years)].copy()
+    gbm = HistGradientBoostingRegressor(random_state=0).fit(tr[feats], tr.demand_mwh - tr.demand_lag_24)
+    tg["pred"] = tg.demand_lag_24 + gbm.predict(tg[feats])
+    tg["resid"] = tg.demand_mwh - tg.pred          # positive = under-forecast
+    tg["ape"] = 100 * tg.resid.abs() / tg.demand_mwh
+    return tg
+
+rows = {}
+for label, feats in [("with load-level inputs (original)", WITH_LEVELS), ("without (current)", NO_LEVELS)]:
+    v, t_ = residuals(feats, 2022, [2023]), residuals(feats, 2023, [2024, 2025])
+    rows[label] = {"val 2023 MAPE": v.ape.mean(), "val bias MWh": v.resid.mean(), "test MAPE": t_.ape.mean(),
+                   "test bias MWh": t_.resid.mean(), "test 6 pm MAPE": t_[t_.local_hour == 18].ape.mean()}
+pd.DataFrame(rows).T.round(2)'''),
+    ("code", '''val6 = residuals(NO_LEVELS, 2022, [2023])
+test6 = residuals(NO_LEVELS, 2023, [2024, 2025])
+F6 = "resid ~ heating_degree*workday + cooling_degree*workday"
+fits = {}
+for label, d in [("2023 validation", val6), ("2024-25 test (descriptive only)", test6)]:
+    m = smf.ols(F6, d[d.local_hour == 18]).fit(cov_type="HAC", cov_kwds={"maxlags": 7})
+    fits[label] = pd.DataFrame({"coef_MWh": m.params, "p_value": m.pvalues}).round(3)
+display(pd.concat(fits, axis=1))
+print("Mean 6 pm error (MWh) by season and day type, 2024-25 test:")
+test6[test6.local_hour == 18].groupby(["season", "workday"]).resid.mean().round(0).unstack().rename(columns={0: "weekend/holiday", 1: "workday"})'''),
+    ("code", '''# Apply corrections fit on 2023 to the 2024-25 forecasts
+out = {}
+for hours, hlabel in [([18], "6 pm only"), ([17, 18, 19, 20], "5-8 pm")]:
+    for formula, flabel in [(F6, "heating/AC x workday"), ("resid ~ 1", "constant")]:
+        corrected = test6.pred.copy()
+        for h in hours:
+            fit = smf.ols(formula, val6[val6.local_hour == h]).fit()
+            msk = test6.local_hour == h
+            corrected[msk] += fit.predict(test6[msk])
+        ape = 100 * (test6.demand_mwh - corrected).abs() / test6.demand_mwh
+        sel = test6.local_hour.isin(hours)
+        out[(hlabel, flabel)] = {"MAPE in those hours, before": test6.ape[sel].mean(), "after": ape[sel].mean(),
+                                 "overall before": test6.ape.mean(), "overall after": ape.mean()}
+six_pm = pd.DataFrame(out).T.round(3)
+six_pm.to_csv("data/clean/six_pm_test.csv")
+six_pm'''),
 ])
 print("built")
