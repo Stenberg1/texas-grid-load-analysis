@@ -1,6 +1,6 @@
 # Texas Grid Load Analysis
 
-How has electricity demand on the Texas grid (ERCOT) changed from 2019 to 2025? How is solar reshaping it, what happened during Winter Storm Uri, does gas price move the generation mix, and how well can hourly load be forecast a day ahead compared with ERCOT's own forecast?
+How has electricity demand on the Texas grid (ERCOT) changed from 2019 to 2025? How is solar reshaping it, what happened during Winter Storm Uri, does gas price move the generation mix, what are these changes worth at market prices, and how well can hourly load be forecast a day ahead on the same terms as ERCOT's own forecast?
 
 Built with Python, DuckDB SQL, scikit-learn/statsmodels and Plotly on seven years of hourly data (61,368 hours).
 
@@ -11,13 +11,14 @@ Built with Python, DuckDB SQL, scikit-learn/statsmodels and Plotly on seven year
 | | |
 |---|---|
 | **Duck curve** | The average daily maximum 3-hour evening ramp in net load (demand minus wind and solar) grew **4.5×**, from **3.1 GW (2019) to 13.8 GW (2025)**. The single steepest ramp rose from 13.4 GW to 30.1 GW. |
-| **Weather-adjusted growth** | ERCOT's annual peak rose about 15% to an 85.5 GW record in 2024. Is that growth or hotter summers? At identical weather and calendar, ERCOT load grew **26% from 2019 to 2025 (about 3.9% a year)**, almost exactly the raw 27%, so weather explains essentially none of it. Summer-afternoon load at identical weather grew 18%, *more* than the raw peak (+12% by 2025): the milder summers of 2024–25 hid the growth. The fastest-growing zones from 2020 to 2023 were **Far West (Permian Basin) +58%** and North +46%, against about 10–11% for the Dallas and Houston zones. |
-| **Fuel mix** | Coal fell from 20.4% to 13.0% of generation while total generation grew 27% (383 to 488 TWh). Gas stayed the largest source (41–47%). Wind plateaued near 24%. |
-| **Gas price and fuel switching** | Controlling for net load, month and year, doubling the Henry Hub price cuts gas's share of fossil generation by only **1.6 points** (95% CI 0.8–2.3, from a 72% average). Switching has **faded**: 8.7 points per doubling in 2019, 0.9–2.9 points since 2022, as coal fell from 20.5% to 12.9% of generation and the remaining plants already run near full output. |
+| **Weather-adjusted growth** | ERCOT's annual peak rose about 15% from 2019 to 2023 and held nearly flat in 2024 (85.5 GW). Is that growth or hotter summers? At identical weather and calendar, ERCOT load grew **26% from 2019 to 2025 (about 3.9% a year)**, almost exactly the raw 27%, so weather explains essentially none of it. Summer-afternoon load at identical weather grew 18%, *more* than the raw peak (+12% by 2025): the milder summers of 2024–25 hid the growth. The fastest-growing zones from 2020 to 2023 were **Far West (Permian Basin) +58%** and North +46%, against about 10–11% for the Dallas and Houston zones. |
+| **Fuel mix** | Coal fell from 20.4% to 13.0% of annual generation while total generation grew 27% (383 to 488 TWh). Gas stayed the largest source (41–47%). Wind plateaued near 24%. |
+| **Gas price and fuel switching** | Controlling for net load, month and year, doubling the Henry Hub price cuts gas's share of fossil generation by **1.6 points** (95% CI 0.5–2.6, from a 72% average). The link looks weaker than in 2019 (8.7 points), at 0.9–2.9 points since 2022. Falling coal capacity doesn't explain that: the fade survives capacity and headroom controls, so I report this as descriptive, not causal. |
 | **Winter Storm Uri** | Served demand peaked at **69.2 GW in the hour ending 8 pm on Feb 14 2021**. Over the next 54 hours generation fell **38.7% (68.0 to 41.7 GW)**: gas down 15.6 GW, wind 4.8 GW, coal 4.6 GW, nuclear 1.4 GW. EIA's demand fell in step to about 43 GW, because EIA reports *served* demand. **ERCOT's own day-ahead forecast ran up to 28.9 GW above served demand** (peaking at 76.8 GW) and **1,568 GWh above it over Feb 15–18**. That is an upper bound on load shed, since it also includes forecast error and conservation. EIA has no missing hours that week. |
-| **Forecast vs ERCOT** | Our day-ahead model reached **2.52% MAPE** (RMSE 1,971 MWh) on 2024–2025, against **8.52%** for the same-hour-last-week baseline. **ERCOT's official forecast scored 2.31%** (RMSE 1,756 MWh) on the same hours. ERCOT wins overall, but ours won on **46% of days** and edged it in 2025 (2.41% vs 2.46%) and in summer. Caveat: our model uses actual weather, and ERCOT had to use forecasts. The result holds on ERCOT's own API (its 9:30 am day-before posting: 2.38%). |
-| **What drives the model** | Day of week and Dallas temperature matter most, then Tyler, hour of day, and Austin, San Antonio and Houston temperatures. The four added cities together (0.97 pts) matter more than Dallas alone (0.88). Testing the 6 pm theory exposed a bug: load-level inputs made the model under-forecast by about 1,000 MWh. Removing them cut error from 2.94% to 2.52%. |
-| **Biggest misses** | The worst days are Hurricane Beryl, cold-snap holidays (MLK Day 2024 and 2025) and sudden warm-ups after cold snaps (Jan 18–19, 2024). The holiday flag barely registers in the model (about 10 holidays a year to learn from): holiday MAPE is 3.93% against 2.48%. |
+| **Forecast vs ERCOT** | Using only what was known at ERCOT's 9:30 am posting, my model reached **3.05% MAPE** (RMSE 2,238 MWh) on 2024–2025, against **2.38%** for that posting (RMSE 1,810 MWh) and **8.53%** for the same-hour-last-week baseline. ERCOT wins clearly: mine beat it on 30% of days. A hindsight version with actual weather scored 2.52%, so hindsight was worth about half a point. |
+| **What drives the model** | Statewide forecast temperature and recent weather matter most, then the temperature over the baseline days and the previous morning's load. |
+| **Biggest misses** | The worst days are storm outages (Hurricane Beryl, the May 2024 Houston derecho), which ERCOT also missed, and the January 2024 cold snap, when the temperature forecast ran about 7 °C warm. Skipping holidays in the baseline did not reduce holiday error. |
+| **What it's worth** | The spring evening price premium over midday rose from **$2.50 to $35.70/MWh**. West Texas went from a discount to the North hub to at least $5 above it in **28% of hours**. Uri's six worst days total **$47 billion** at day-ahead prices, more than 2.5 times all of 2019. |
 
 ## Data sources
 
@@ -25,11 +26,13 @@ Built with Python, DuckDB SQL, scikit-learn/statsmodels and Plotly on seven year
 |---|---|---|---|
 | [EIA Open Data API v2](https://www.eia.gov/opendata/), `electricity/rto/region-data` | Hourly ERCOT demand (`type=D`) | 2019-01-01 to 2025-12-31 (UTC) | 61,367 |
 | EIA, `electricity/rto/region-data` | **ERCOT's own day-ahead demand forecast** (`type=DF`, as ERCOT files it on Form EIA-930) | same | 61,320 |
-| [ERCOT public API](https://apiexplorer.ercot.com), report `NP3-565-CD` | ERCOT's 7-day load forecast by model and weather zone. We keep the **09:30 posting the day before** each delivery day (before the 10:00 day-ahead market), all 8 forecast models | 2024-01-01 to 2025-12-31 | 135,217 |
+| [ERCOT public API](https://apiexplorer.ercot.com), report `NP3-565-CD` | ERCOT's 7-day load forecast by model and weather zone. I keep the **09:30 posting the day before** each delivery day (before the 10:00 day-ahead market), all 8 forecast models | 2024-01-01 to 2025-12-31 | 135,217 |
 | EIA, `electricity/rto/fuel-type-data` | Hourly generation by fuel (NG, COL, NUC, WND, SUN, WAT, OTH, BAT, UES) | same | 449,006 |
 | EIA, `electricity/rto/region-sub-ba-data` | Hourly load for ERCOT's 8 weather zones | 2019-05-27 onward | 462,405 |
 | EIA, `natural-gas/pri/fut` (series `RNGWHHD`) | Daily Henry Hub natural gas spot price, $/MMBtu | 2019-01-02 to 2025-12-31 | 1,755 trading days |
 | [Open-Meteo historical archive](https://open-meteo.com/en/docs/historical-weather-api) | Hourly 2 m temperature for 8 cities | same | 490,944 (61,368 per city) |
+| [Open-Meteo Previous Runs](https://open-meteo.com/en/docs/previous-runs-api) | Archived GFS and JMA temperature forecasts for 8 cities, predicted 1 to 4 days before each valid hour | 2021-03-24 to 2025-12-31 | 669,696 (both models) |
+| [ERCOT report NP4-180-ER](https://www.ercot.com/mp/data-products/data-product-details?id=NP4-180-ER) | Hourly day-ahead settlement prices at the hubs (public, no login) | 2019-01-01 to 2025-12-31 | 306,840 |
 
 **Timestamps** are stored in UTC and converted to `America/Chicago` only for calendar fields. EIA hourly values are **hour-ending**: the row for 17:00 local covers 4–5 pm. A check on solar output confirms it: generation is centred on the hour ending 2 pm, which matches solar noon. Holidays are US federal holidays from the `holidays` package.
 
@@ -133,19 +136,22 @@ python src/pull_data.py                       # about 5 min, writes data/raw/*.p
 # ERCOT_USERNAME and ERCOT_PASSWORD to .env, then:
 python src/pull_ercot.py                      # about 25 min (rate-limited), resumable
 python src/run_sql.py                         # builds data/grid.duckdb from sql/01..10
-jupyter nbconvert --execute --inplace notebooks/*.ipynb   # run in order 01 to 05
+jupyter nbconvert --execute --inplace notebooks/*.ipynb   # run 01 to 07 in order; 06 reads output from 02
 ```
 
 | Path | Contents |
 |---|---|
-| `src/pull_data.py` | Paginated EIA pulls (5,000 rows per call) and Open-Meteo pull. `python src/pull_data.py gas forecast` reruns individual parts. |
+| `src/pull_data.py` | Paginated EIA pulls (5,000 rows per call) and Open-Meteo pull. `python src/pull_data.py gas forecast` reruns individual parts (`weather_forecast` and `prices` cover the newest pulls). |
 | `sql/01_schema.sql` … `sql/10_forecast_compare.sql` | One question per file; the first line of each states it |
 | `src/run_sql.py` | Runs the SQL files in order and prints row counts, quality checks and city weights |
 | `notebooks/01_sql_analysis.ipynb` | Query results, spot checks, Uri numbers, EXPLAIN ANALYZE timings |
-| `notebooks/02_model.ipynb` | Features, temperature validation, models, head-to-head comparison with ERCOT, error analysis |
+| `notebooks/02_model.ipynb` | The hindsight model: features, temperature validation, baselines, error analysis |
 | `notebooks/03_charts.ipynb` | Charts, exported to `charts/*.png` and `charts/*.html` |
-| `notebooks/04_gas_prices.ipynb` | Gas price vs fuel mix: quintiles and a controlled regression |
-| `notebooks/05_drivers_and_misses.ipynb` | Weather-adjusted growth, per-city feature importance, the 10 biggest misses, the 6 pm heating/AC test |
+| `notebooks/04_gas_prices.ipynb` | Gas price vs fuel mix: quintiles, controlled regression, capacity and headroom tests |
+| `notebooks/05_drivers_and_misses.ipynb` | Weather-adjusted growth, hindsight-model diagnostics, the 6 pm heating/AC test |
+| `notebooks/06_operational_forecast.ipynb` | The 9:30 am forecast: cross-validation, test scores, peak hours, holiday test, importance, misses |
+| `notebooks/07_prices.ipynb` | Evening premium, Uri at market prices, West hub gap |
+| `src/op_forecast.py` | Feature rules for the 9:30 am forecast, with no-leak assertions |
 | `src/pull_ercot.py` | ERCOT API pull: token login, one request per delivery day, cached per day so it can resume |
 | `src/build_notebooks.py` | Generates the notebooks from source |
 
@@ -172,161 +178,93 @@ jupyter nbconvert --execute --inplace notebooks/*.ipynb   # run in order 01 to 0
 
 ## Model results
 
-Day-ahead forecast of hourly load. Train on 2019–2023, test on 2024–2025, split by time. The main model predicts the **change from the same hour yesterday**, then adds yesterday's load back. Its inputs are all known a day ahead:
-- **Calendar:** hour, weekday, month, weekend and holiday flags.
-- **Temperature:** temperature, cooling and heating degrees (base 18.3 °C), temperature squared, and the change in temperature from the same hour yesterday.
+ERCOT posts its day-ahead forecast at 9:30 am the day before delivery, so my headline forecast follows the same rule (`src/op_forecast.py`, `notebooks/06_operational_forecast.ipynb`):
+- **Load:** known only through hour ending 9 am the day before. The code asserts this.
+- **Weather:** archived forecasts, using the newest run already published at 9:30 am. Each delivery hour uses the 24-hour-old value if that run was out (allowing 4 hours to publish), otherwise the 48-hour-old value. GFS is the main source; JMA fills GFS's archive gap (2023-12-30 to 2024-01-19).
+- **Target:** load divided by a baseline, the average of the same hour over the last 14 fully known non-holiday days. A ratio to a moving baseline handles load growth, which tree models can't extrapolate.
+- **Other inputs:** calendar, holiday flags, city and load-weighted forecast temperature, the previous morning's load, the last full day's load, and recent weather.
 
-Yesterday's load is used only as that anchor, not as an input (see below). All rows use the same 17,496 test hours; the 48 with no ERCOT forecast are dropped.
+Train 2019–2023 (Uri excluded), test 2024–2025. Before March 2021, training rows use observed temperature plus a fixed offset measured on 2022. Inputs were compared by expanding-window cross-validation over 2022 and 2023, and settings were tuned on 2023 (3.17% to 2.99%). The chosen settings are 500 iterations, learning rate 0.1, 31 leaves and at least 60 samples per leaf, with early stopping off.
 
-| Model | RMSE (MWh) | MAPE (%) |
+| Forecast (same 17,489 test hours) | RMSE (MWh) | MAPE (%) | Bias (MWh) |
+|---|---:|---:|---:|
+| Baseline: same hour last week | 6,482 | 8.53 | −28 |
+| **Mine, 9:30 am information only** | **2,238** | **3.05** | **−304** |
+| *ERCOT 9:30 am posting (API, in-use model)* | *1,810* | *2.38* | *+410* |
+| ERCOT day-ahead, EIA-930 copy (posting time undocumented) | 1,757 | 2.31 | +418 |
+| Reference: mine with hindsight (notebook 02) | 1,971 | 2.52 | +50 |
+
+| | Mine | ERCOT posting |
 |---|---:|---:|
-| Baseline: same hour last week | 6,481 | 8.52 |
-| Reference: same hour yesterday | 3,500 | 4.51 |
-| Linear regression (OLS, calendar dummies) | 3,604 | 5.56 |
-| Gradient boosting, default settings, predicting load | 3,733 | 5.70 |
-| **Gradient boosting, default settings, predicting change vs yesterday** | **1,971** | **2.52** |
-| *ERCOT official day-ahead forecast* | *1,756* | *2.31* |
+| 2024 | 3.14% | 2.24% |
+| 2025 | 2.95% | 2.53% |
+| Winter | 3.59% | 2.81% |
+| Spring | 2.74% | 2.35% |
+| Summer | 2.96% | 2.22% |
+| Fall | 2.92% | 2.16% |
+| Summer, 4 to 8 pm | 3.05% | 2.39% |
+| Size of each day's peak | 2.98% | 2.46% |
+| Days the peak hour was called exactly | 37% | 59% |
 
-**Why the change-vs-yesterday target:** gradient boosting that predicts load directly loses to the naive "yesterday" forecast. Tree models cannot extrapolate, and 2024–25 load sits above most of the training range. Training the same default model on the change from yesterday fixes this. No hyperparameters were tuned.
+**ERCOT wins in both years, every season and at the peak.** Mine beats it on 30% of days and 40% of hours, and removes about two-thirds of the baseline's error.
 
-**Bug found and fixed: load levels as inputs.** The first version also fed yesterday's and last week's load *levels* in as inputs. In 2019–23 the model learned that unusually high-load days tend to be followed by drops. In 2024–25 load is high every day because of growth, so it kept predicting drops that never came.
+**Recent weather (rolling 24 and 72 hour temperature, overnight low).** Buildings hold heat and cold, so these should help. The evidence is uneven: they cut 2022 cross-validated error from 3.65% to 3.34% and left 2023 about the same (3.15% to 3.17%). They stayed in on the pooled score, chosen before the test set was read.
 
-| | 2023 validation MAPE | Test MAPE | Test bias | Test, hour ending 6 pm |
-|---|---:|---:|---:|---:|
-| With load-level inputs (first version) | 2.92% | 2.94% | under by 1,033 MWh | 3.44% |
-| **Without (current)** | **2.65%** | **2.52%** | **over by 54 MWh** | **3.04%** |
+**Holidays: the fix didn't work.** Skipping holidays in the baseline left holiday error at about 4.0% and the two days after at 3.47%, against 3.39% without the fix. ERCOT scored 2.9% on both. Anchoring on a single day a week earlier made holiday-period error worse in validation.
 
-The change was chosen on the 2023 validation year, not the test set. It was found while testing the 6 pm theory below.
-
-**Which temperature (decided on the 2023 validation year, never the test set):**
-
-| Temperature input | MAPE | RMSE (MWh) |
-|---|---:|---:|
-| 4 cities, simple average | 2.65% | 1,878 |
-| 8 cities, simple average | 2.74% | 1,914 |
-| 8 cities, load-weighted (used) | 2.65% | 1,871 |
-
-Adding the four smaller cities with equal weight makes the forecast worse. Load-weighted, the 8 cities tie the original four on MAPE and have the lowest RMSE.
-
-**Against ERCOT.** ERCOT's forecast is better overall (2.31% vs 2.52%), but the gap is small:
-
-| | Ours | ERCOT |
-|---|---:|---:|
-| 2024 | 2.63% | 2.16% |
-| 2025 | **2.41%** | 2.46% |
-| Winter | 3.2% | 2.8% |
-| Spring | 2.6% | 2.3% |
-| Summer | **2.1%** | 2.2% |
-| Fall | 2.2% | 2.0% |
-
-- **Head to head:** ours wins on 46% of days and 48% of hours.
-- **Where we edge ERCOT:** 2025 and summer.
-- **Bias:** ERCOT runs high by 417 MWh on average; ours runs high by 51 MWh.
-- **Don't read this as "better than ERCOT".** Our model sees *actual* temperatures and yesterday's late-evening load. ERCOT had to use weather forecasts and publishes before yesterday's evening is over. With forecast weather, our error would rise. The fair claim is: within 0.2 points of the grid operator's forecast, with hindsight on the weather.
-
-### Check: ERCOT's own API
-
-The headline compares against the EIA copy of ERCOT's forecast, because it covers all seven years with one consistent source. As a check, `src/pull_ercot.py` pulls ERCOT's forecast directly from ERCOT's API: the 09:30 Central posting on the day before each delivery day, the last one before the day-ahead market closes, for every forecast model.
-
-| Forecast (same 17,489 test hours) | RMSE (MWh) | MAPE (%) |
-|---|---:|---:|
-| ERCOT day-ahead forecast, EIA-930 copy (headline) | 1,757 | 2.31 |
-| ERCOT 9:30 am posting, in-use model (ERCOT API) | 1,810 | 2.38 |
-| Ours | 1,971 | 2.52 |
-| Baseline: same hour last week | 6,482 | 8.53 |
-
-**The conclusion holds on both sources.** The EIA copy scores slightly better and differs by about 465 MWh per hour on average, consistent with it being a later posting.
-
-**ERCOT's own forecast models (API, 2024–25):**
-
-| Model | MAPE | Share of hours in use |
-|---|---:|---:|
-| X (from Aug 2024 only) | 2.08% | 10% |
-| M | 2.25% | 5% |
-| The in-use pick | 2.39% | — |
-| E3 | 2.58% | 21% |
-| E | 2.60% | 28% |
-| A3 | 2.62% | 0.1% |
-| A6 | 2.71% | — |
-| E2 | 2.72% | 18% |
-| E1 | 2.77% | 17% |
-
-With hindsight, ERCOT's choice of model each day did worse than always using M. To be fair to ERCOT, the choice is made without hindsight.
-
-**By weather zone,** the in-use forecast misses big zones by 3.6–4.0% and small ones by much more: East 5.7%, North 6.4%, West 9.6%.
-
-**A blend, with a caveat.** A weighted average of 40% ours and 60% ERCOT (weight fit on 2024, scored on 2025) reaches 2.06% MAPE in 2025, against 2.53% for ERCOT alone and 2.41% for ours. **This is not a fair test.** Our model has the hindsight described above, so the gain is mostly that hindsight leaking in. It does not show the model would improve ERCOT's operational forecast.
+**Humidity isn't in the model.** Open-Meteo archives no dew point or humidity forecasts. Observed dew point would have cut validation error by about 0.15 points, but that would bring back hindsight.
 
 ### What drives the model
 
-The same model was retrained with each of the 8 cities' temperatures as separate inputs, instead of the weighted average. Each group of inputs was then shuffled on the test set to see how much accuracy falls (grouped permutation importance, 5 shuffles each).
+Grouped permutation importance on the test set, 5 shuffles each. Correlated inputs split the credit, so a low score means an input adds little beyond the others, not that it's irrelevant.
 
 | Input | MAPE rise when shuffled (pts) |
 |---|---:|
-| Day of week | 0.93 |
-| Dallas temperature | 0.88 |
-| Tyler temperature | 0.52 |
-| Hour of day | 0.49 |
-| Austin temperature | 0.45 |
-| San Antonio temperature | 0.43 |
-| Houston temperature | 0.43 |
-| Corpus Christi temperature | 0.24 |
-| Midland temperature | 0.14 |
-| Lubbock temperature | 0.07 |
-| Month | 0.04 |
-| Holiday / weekend flags | 0.01 |
-
-- **The four added cities pull their weight.** Together they score 0.97, more than Dallas alone (0.88). Tyler, in East Texas, ranks third overall. It may be picking up weather fronts arriving from the east and north, though this test can't prove why.
-- **Separate city temperatures score 2.48%,** slightly better than the weighted average's 2.52%. That's a test-set comparison, so it is reported but was not used to switch models.
-- **Correlated cities split the credit.** City temperatures move together, so a modest score means "adds little the other cities don't already carry", not "irrelevant".
+| Statewide forecast temperature | 2.27 |
+| Recent weather | 1.90 |
+| Temperature over the baseline days | 1.20 |
+| Morning load, day before | 1.14 |
+| Day of week | 0.79 |
+| Dallas temperature | 0.69 |
+| Hour of day | 0.52 |
+| Tyler temperature | 0.21 |
+| Houston temperature | 0.15 |
+| Load two days before | 0.14 |
+| Month | 0.13 |
+| Other cities, holiday flags | 0.07 or less each |
 
 ![Feature importance](charts/feature_importance.png)
 
 ### The 10 biggest misses (test set, by daily MAPE)
 
-The context column is generated from the data (holidays, the day after a holiday, freezing or extreme heat, temperature swings from the day before), except Hurricane Beryl.
+| Date | Mine | ERCOT | Mean error | Context |
+|---|---:|---:|---:|---|
+| 2024-07-08 | 19.3% | 16.3% | +9.6 GW | Hurricane Beryl landfall near Houston; about 2.2 million customers lost power |
+| 2024-01-15 | 14.1% | 4.8% | −10.2 GW | MLK Day, freezing; temperature forecast 6.8 °C warm |
+| 2024-05-17 | 10.2% | 10.2% | +4.8 GW | Day after the Houston derecho |
+| 2024-01-14 | 9.8% | 6.0% | −5.7 GW | Freezing; temperature forecast 7.0 °C warm |
+| 2024-05-28 | 9.7% | 9.0% | +3.6 GW | Day after Memorial Day |
+| 2024-07-09 | 9.1% | 9.7% | +4.8 GW | Beryl outages continuing |
+| 2024-01-29 | 9.1% | 1.2% | +4.0 GW | No clear driver in the data |
+| 2024-05-16 | 8.2% | 5.6% | +1.3 GW | Houston derecho |
+| 2024-11-01 | 8.0% | 2.9% | +4.1 GW | No clear driver in the data |
+| 2024-06-05 | 7.9% | 8.7% | +3.7 GW | No clear driver in the data |
 
-| Date | Day | Ours | ERCOT | Worst hour (error) | Context |
-|---|---|---:|---:|---|---|
-| 2024-07-08 | Mon | 14.9% | 15.4% | noon (+14.2 GW) | Hurricane Beryl landfall near Houston; about 2.2 million customers lost power |
-| 2024-01-15 | Mon | 14.3% | 4.8% | 7 am (−22.9 GW) | MLK Day, freezing (low −7 °C) |
-| 2024-01-18 | Thu | 13.8% | 7.0% | 9 pm (+8.7 GW) | Temperature swung up to 12 °C from the day before |
-| 2024-11-05 | Tue | 10.1% | 2.2% | noon (+8.6 GW) | No clear driver in our data |
-| 2024-01-19 | Fri | 9.3% | 6.5% | 5 am (+8.8 GW) | Near freezing, a 12 °C swing from the day before |
-| 2024-11-01 | Fri | 9.2% | 2.7% | 5 pm (+7.5 GW) | No clear driver in our data |
-| 2025-01-20 | Mon | 9.1% | 2.8% | 6 pm (−10.9 GW) | MLK Day, freezing (low −4 °C) |
-| 2025-01-02 | Thu | 8.8% | 1.8% | 10 am (−6.5 GW) | Day after New Year's Day (the model anchors on holiday-level load) |
-| 2025-05-26 | Mon | 8.5% | 7.8% | 4 pm (+7.8 GW) | Memorial Day |
-| 2025-06-13 | Fri | 8.4% | 2.6% | 8 pm (−11.0 GW) | No clear driver in our data |
+Beryl and the derecho are labeled by hand; the rest comes from the data. January 14–15 fall in the JMA-filled weeks.
 
-**Patterns in the misses:**
-- **Sudden weather swings.** Jan 18–19, 2024 followed an Arctic cold snap. Temperatures jumped 12 °C, load fell faster than the model expected, and it over-forecast.
-- **Holidays.** Four of the ten are a holiday or the day after one. The model anchors on yesterday's load, and the holiday flag carries almost no weight (0.01 points above), since there are only about 10 holidays a year to learn from. Holiday MAPE is 3.93%, against 2.48% on other days.
-- **Beryl is the one day ERCOT also missed badly.** Outages took load away from both forecasts.
-- **ERCOT handles holidays and swings much better,** at 1.8–7.0% on those days against our 8.5–14.3%.
+### The hindsight version
 
-**Where our model fails, by group:**
+The first model (notebook 02) used observed temperature and the previous day's full load. It predicted the change from the same hour yesterday and scored 2.52%. It isn't a fair comparison with ERCOT, but two lessons came from it.
 
-| Breakdown | Our MAPE |
-|---|---:|
-| Winter | 3.2% |
-| Spring | 2.6% |
-| Fall | 2.2% |
-| Summer | 2.1% |
-| Holidays | 3.93% |
-| Other days | 2.48% |
+**Why tree models need an anchor.** Gradient boosting that predicts load directly scored 5.70%, worse than the naive "yesterday" forecast (4.51%), because 2024–25 load sits above most of the training range and trees can't extrapolate.
 
-### The 6 pm question
+**Bug: load levels as inputs.** That version also fed in yesterday's and last week's load levels. In 2019–23 it learned that high-load days are followed by drops. In 2024–25 load is high every day because of growth, so it kept predicting drops and under-forecast by about 1,000 MWh. Removing them cut error from 2.94% to 2.52%; the change was chosen on the 2023 validation year.
 
-Hour ending 6 pm was the first model's worst hour, which raised a question: do people get home and switch on heating or AC? That would call for a correction on cold or hot workday evenings.
-
-A correction for heating, AC and workdays was fit on 2023 errors and applied to 2024–25. It made 6 pm accuracy slightly *worse* (3.04% → 3.10%), and none of its terms was significant in 2023. So no correction was added.
-
-Investigating why 6 pm looked bad is what found the load-level input bug above. That bug, not commuter heating, was most of the 6 pm problem. The full test is in `notebooks/05_drivers_and_misses.ipynb`, section 4.
+**The 6 pm question.** Hour ending 6 pm was its worst hour, which raised a question: do people get home and switch on heating or AC? A correction fit on 2023 made 6 pm slightly worse (3.04% to 3.10%), and none of its terms was significant, so I didn't add one. Investigating this is what exposed the bug above. See `notebooks/05_drivers_and_misses.ipynb`, section 4.
 
 ## Weather-adjusted demand growth
 
-Peak load rose 15% to the 2024 record. To separate growth from weather, `notebooks/05_drivers_and_misses.ipynb` fits log(hourly load) on:
+Peak load rose about 15% from 2019 to 2023. To separate growth from weather, `notebooks/05_drivers_and_misses.ipynb` fits log(hourly load) on:
 - **Temperature:** cooling and heating degrees and their squares, each with its own effect by hour of day.
 - **Calendar:** hour, weekday, month and holidays.
 - **A year effect:** the change in load at identical weather and calendar.
@@ -358,23 +296,56 @@ Gas and coal compete for the load left after wind, solar and nuclear, so the out
 
 **Raw comparison (`sql/09_gas_price.sql`):** price quintiles are ranked *within each month*, so seasonality and coal retirements don't pose as a price effect. Gas share of fossil generation goes from 72.2% on the cheapest fifth of days to 71.5% on the most expensive.
 
-**Controlled regression (`notebooks/04_gas_prices.ipynb`):** gas share of fossil is regressed on log(price), net load, net load squared, month and year, with Newey-West standard errors. The result: **−1.55 points per doubling of price** (95% CI −2.28 to −0.83).
+**Controlled regression (`notebooks/04_gas_prices.ipynb`):** gas share of fossil is regressed on log(price), net load, net load squared, month and year, with Newey-West standard errors. The result: **−1.55 points per doubling of price** (95% CI −2.64 to −0.47). Adding weather or a coal capacity proxy, or using mild days only, gives −1.6 to −2.1.
 
-**By year, the effect has faded:**
+**Bug fixed:** Newey-West assumes rows are in time order, and the query didn't guarantee it. Sorting by date widened this interval from −2.28 to −0.83.
 
-| Year | Points per doubling | Coal share (avg of days, Uri excluded) |
-|---|---:|---:|
-| 2019 | −8.7 | 20.5% |
-| 2020 | −4.8 | 18.1% |
-| 2021 | −3.8 (wide CI) | 19.2% |
-| 2022 | −2.7 | 16.9% |
-| 2023 | −0.9 | 13.9% |
-| 2024 | −2.0 | 12.6% |
-| 2025 | −2.9 | 12.9% |
+**By year:**
 
-With less coal left, and what remains already running near full output, there is little room to switch away from gas when it gets expensive.
+| Year | Points per doubling | 95% CI (±) | Coal share (avg of days, Uri excluded) |
+|---|---:|---:|---:|
+| 2019 | −8.7 | 5.7 | 20.5% |
+| 2020 | −4.8 | 1.9 | 18.1% |
+| 2021 | −3.8 | 6.6 | 19.2% |
+| 2022 | −2.7 | 2.6 | 16.9% |
+| 2023 | −0.9 | 3.2 | 13.9% |
+| 2024 | −2.0 | 2.6 | 12.6% |
+| 2025 | −2.9 | 2.0 | 12.9% |
+
+This coal share is the average of daily shares without Uri, so it differs slightly from the annual totals in Key findings (20.4% to 13.0%).
+
+**Why it faded.** There's no fleet capacity in this data, so I built two proxies from earlier days' coal output: peak output over the previous 30 days, and headroom (that peak minus average output).
+
+| Test | Result |
+|---|---|
+| Price × coal capacity (12.6 GW in 2019, 10.3 GW in 2025) | +0.08 per GW, p = 0.62: no effect |
+| Price × headroom | −2.0 per GW, p < 0.001: spare coal means more switching |
+| Headroom over time | 3.6 GW in 2019, 3.0 GW in 2025, 4.1 GW in 2024: no clear trend |
+| Price × time, with headroom controlled | +0.85 per year, p = 0.005: the fade remains |
+
+So coal retirements don't explain the fade in this data. Weather also moves prices, demand and plant availability together, and Henry Hub isn't the Texas price, so these results are descriptive, not causal.
 
 ![Gas switching](charts/gas_price_switching.png)
+
+## What this means
+
+From ERCOT's public day-ahead prices (`notebooks/07_prices.ipynb`, hub average `HB_BUSAVG`, medians, Uri excluded from yearly figures):
+
+| Year | Spring midday | Spring evening | Spring premium | Top-2 minus bottom-2 hours, all year | West minus North hub | Hours West is $5+ above North |
+|---|---:|---:|---:|---:|---:|---:|
+| 2019 | $25.1 | $27.6 | $2.5 | $28.4 | −$1.4 | 0.2% |
+| 2020 | $20.8 | $23.1 | $2.3 | $24.9 | −$2.0 | 0.9% |
+| 2021 | $23.9 | $30.1 | $6.2 | $40.0 | −$4.1 | 0.2% |
+| 2022 | $45.7 | $79.3 | $33.6 | $66.5 | −$4.8 | 4.5% |
+| 2023 | $20.6 | $39.9 | $19.2 | $43.7 | +$1.0 | 19.5% |
+| 2024 | $13.0 | $42.1 | $29.1 | $36.2 | +$1.9 | 22.6% |
+| 2025 | $20.3 | $56.0 | $35.7 | $46.4 | +$0.8 | 28.2% |
+
+- **Evening flexibility is worth more.** The steeper ramp shows up in prices. The daily top-to-bottom gap is a rough gross margin for a two-hour battery before losses, and more batteries would likely narrow it. 2022 reflects high gas prices.
+- **West Texas is a transmission question.** The West hub moved from a discount to a frequent premium, which fits load growing faster than the wires serving it, though prices alone can't prove the cause.
+- **Uri at market prices.** February 14–19, 2021 averaged about $6,500/MWh of served demand, against $22 in the three weeks before. That's $47 billion, compared with $18 billion for all of 2019. This is market value, not what customers paid.
+
+![Evening premium](charts/evening_premium.png)
 
 ## Charts
 
@@ -386,40 +357,25 @@ Each has a static PNG and an interactive HTML version in `charts/`.
 | [Weather-adjusted growth](charts/weather_adjusted_growth.html) | At identical weather, load grew 26% from 2019 to 2025 |
 | [Duck curve](charts/duck_curve.html) | Spring midday net load sinks to about 21 GW in 2025; the evening ramp steepens |
 | [Winter Storm Uri](charts/uri_week.html) | Generation fell 39% from the peak; ERCOT's forecast ran up to 29 GW above served demand |
-| [Gas price switching](charts/gas_price_switching.html) | Gas-to-coal switching has faded since 2019 |
-| [What drives the model](charts/feature_importance.html) | Yesterday's load, then Dallas and Austin temperature |
-| [Error by season](charts/model_error_by_season.html) | Our model vs the baseline vs ERCOT |
+| [Gas price switching](charts/gas_price_switching.html) | Gas-to-coal switching looks weaker than in 2019; the cause is unclear |
+| [What drives the model](charts/feature_importance.html) | Statewide forecast temperature, then recent weather |
+| [Error by season](charts/model_error_by_season.html) | My 9:30 am forecast vs the baseline vs ERCOT's posting |
+| [Evening premium](charts/evening_premium.html) | Spring evening prices have pulled away from midday |
 
 ![Uri](charts/uri_week.png)
 
 ## Limitations
 
-- **The ERCOT comparison favours us.** Our model uses observed temperature where a real day-ahead system has only a weather forecast; ERCOT had to use forecasts and still won. With forecast weather, our error would be higher.
-- **The 24-hour lag is a simplification.** Treating the same hour yesterday as known a day ahead assumes the forecast is issued at the end of each hour. ERCOT publishes in the morning, before yesterday's evening hours are in.
-- **Two sources for ERCOT's forecast.** The headline uses the EIA-930 copy (all 7 years; its posting time is not documented). ERCOT's own API (2024–25 only, needs a registered account) is used as a check on a documented 9:30 am posting. The two agree within 0.07 points.
+- **Weather forecast gaps.** GFS's archive is missing 2023-12-30 to 2024-01-19, so those weeks use JMA, a less accurate model. Hours that can't use the 24-hour-old run use the 48-hour-old run, which understates what was available. Before March 2021, training uses observed temperature plus an offset.
+- **Timing assumptions.** Load through 9 am is treated as available by 9:30 am, and a model run as available four hours after it starts.
+- **Test set handling.** Notebook runs scored the test set before the last changes (adding recent weather, turning off early stopping), but I did not read those results until the design was final.
+- **Two sources for ERCOT's forecast.** The headline comparison uses ERCOT's own API, which has a documented 9:30 am posting but covers only 2024–25 and needs a registered account. The Uri analysis uses the EIA-930 copy, which covers all 7 years but has no documented posting time. The two agree within 0.07 points on 2024–25.
 - **ERCOT-wide demand only.** The model forecasts total ERCOT load and does not use the zone data except for temperature weights. Eight cities stand in for statewide weather, and the North zone has no city.
-- **Henry Hub is a national price.** Texas plants buy gas at Houston Ship Channel and Waha, and Waha in particular often trades far below Henry Hub. Coal prices are not included either.
-- **EIA demand is served demand.** During load shed (Uri) it understates true demand, and those hours stay in the 2021 training data.
+- **Henry Hub is a national price.** Texas plants buy gas at Houston Ship Channel and Waha, and Waha in particular often trades far below Henry Hub. I found no free daily series for either. Coal prices and actual plant availability are not included.
+- **EIA demand is served demand.** During load shed (Uri) it understates true demand, so Uri is left out of training for the 9:30 am model.
 - **EIA data gaps and coding changes:** a missing generation day (2025-12-05), missing forecast days (Dec 5–7 2025), gas misfiled as OTH (fixed), zone totals that drift in 2024–25, and storage categories (BAT/UES) that only start in Nov 2024.
-- **No electricity price data,** so the analysis cannot say what the ramps or Uri cost.
+- **Prices are day-ahead hub prices,** not what customers paid, and the market value figures ignore hedges and real-time settlement.
 
-## SQL techniques used
+## Skills
 
-- **Joins:**
-  - LEFT JOIN against a generated hour spine for gap detection.
-  - A self-join on weekday and hour for the Uri baseline.
-  - Star-schema joins of facts to `dim_calendar`, `dim_fuel` and `dim_city`.
-  - **ASOF JOIN** to carry the last Henry Hub price across weekends and holidays.
-- **CTEs:** multi-step `WITH` pipelines in the model table, city weights, peak growth, fuel share, Uri and gas queries.
-- **Window functions:**
-  - `AVG … ROWS BETWEEN 167 PRECEDING` for the 7-day rolling average.
-  - `LAG` for the 1 h ramp, 24 h and 168 h lags, the 3 h net-load ramp and year-over-year growth.
-  - `RANK() OVER (PARTITION BY year)` for top peaks and ramps.
-  - `NTILE(5) OVER (PARTITION BY year, month)` for gas price quintiles.
-  - `LAST_VALUE/FIRST_VALUE … IGNORE NULLS` with named `WINDOW`s for interpolation.
-  - `COUNT(*) OVER (PARTITION BY zone)` and `SUM … OVER ()` for city weights.
-- **Conditional aggregation:** `SUM(CASE WHEN fueltype = 'SUN' …)` to pivot fuels into columns, and `AVG … FILTER (WHERE …)` for quintile comparisons.
-- **Generated series:** `generate_series` over timestamps to build the calendar dimension.
-- **PIVOT / UNPIVOT:** `UNPIVOT` turns ERCOT's 8 zone columns into rows to join with zone load; `PIVOT` puts the 8 city temperatures into columns for the per-city model.
-- **Views:** `daily_peak`, `fuel_mix_yearly` and `net_load_hourly`.
-- **Performance:** `EXPLAIN ANALYZE` on DuckDB 2.0, median of 5 runs. The 7-day rolling window over 61k rows took **4.5 ms**; the Uri weekday-and-hour self-join took **2.0 ms**.
+SQL (DuckDB: star schema, window functions, ASOF joins, PIVOT), Python (pandas, scikit-learn, statsmodels), time-series validation, regression with Newey-West errors, Plotly.
