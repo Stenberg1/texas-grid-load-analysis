@@ -10,3 +10,4 @@ kaleido
 jupyter
 python-dotenv
 pytz
+openpyxl
