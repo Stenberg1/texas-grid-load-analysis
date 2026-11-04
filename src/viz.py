@@ -45,9 +45,12 @@ pio.templates["grid"] = go.layout.Template(
 pio.templates.default = "grid"
 
 
+CAPTION_Y = -0.2
+
+
 def add_caption(fig, text):
     """One-line takeaway under the plot."""
-    fig.add_annotation(text=text, xref="paper", yref="paper", x=0, y=-0.2,
+    fig.add_annotation(text=text, xref="paper", yref="paper", x=0, y=CAPTION_Y,
                        xanchor="left", yanchor="top", showarrow=False,
                        font=dict(size=13, color=INK_2))
 
@@ -55,4 +58,7 @@ def add_caption(fig, text):
 def save(fig, name, width=1100, height=620):
     CHARTS.mkdir(exist_ok=True)
     fig.write_image(CHARTS / f"{name}.png", width=width, height=height, scale=2)
+    # the interactive version is embedded under a page caption, where the in-chart caption collides with the axis title
+    fig.layout.annotations = [a for a in fig.layout.annotations if a.y != CAPTION_Y]
+    fig.update_layout(margin_b=70)
     fig.write_html(CHARTS / f"{name}.html", include_plotlyjs="cdn")
