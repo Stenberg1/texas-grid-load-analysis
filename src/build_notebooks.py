@@ -381,7 +381,7 @@ build("04_gas_prices.ipynb", [
     ("code", 'q("SELECT * FROM gas_price_by_year")'),
     ("md", GAS_REG_MD),
     ("code", '''import statsmodels.formula.api as smf
-d = q("SELECT * FROM gas_daily WHERE NOT is_uri")
+d = q("SELECT * FROM gas_daily WHERE NOT is_uri ORDER BY local_date")   # Newey-West needs rows in time order
 d["log_p"] = np.log(d.henry_hub_usd)
 d["nl_gw"] = d.net_load_mwh / 24 / 1000
 LN2 = np.log(2)
@@ -411,8 +411,53 @@ fig.add_hline(y=0, line=dict(color=INK_2, width=1))
 fig.update_layout(title="How much gas loses to coal when gas prices double, by year", bargap=0.45,
                   xaxis_title="Year", yaxis_title="Change in gas share of fossil generation (pts)", xaxis=dict(dtick=1))
 first, late = by_year.iloc[0], by_year[by_year.year >= 2022]
-add_caption(fig, f"Fuel switching has faded: {first.shift_per_doubling_pts:+.1f} pts per doubling in {int(first.year)}, {late.shift_per_doubling_pts.min():+.1f} to {late.shift_per_doubling_pts.max():+.1f} since 2022 as coal shrank. Pooled: {b:+.1f} pts. Bars: 95% CI.")
+add_caption(fig, f"Fuel switching looks weaker: {first.shift_per_doubling_pts:+.1f} pts per doubling in {int(first.year)}, {late.shift_per_doubling_pts.min():+.1f} to {late.shift_per_doubling_pts.max():+.1f} since 2022. Pooled: {b:+.1f} pts. Bars: 95% CI. Descriptive, not causal.")
 save(fig, "gas_price_switching")'''),
+    ("md", """## Why did switching fade? Testing the coal-capacity story
+Two threats to reading the regression above as "gas price causes switching, and coal retirements ended it":
+1. **Weather moves everything.** Cold snaps and heat waves raise gas prices and demand and take plants offline, so the price coefficient can pick up weather. Below I add heating and cooling degrees, and rerun on mild days only.
+2. **Behavior vs. capacity.** The year-by-year fade lines up with coal retirements, but the year-by-year regression can't say which caused it.
+
+There is no coal fleet capacity in this data, so I build two proxies from coal output itself, using only earlier days so today's dispatch can't feed into them:
+- **Capacity proxy:** the highest hourly coal output in the previous 30 days.
+- **Headroom:** that proxy minus average coal output over the previous 30 days, i.e. how much spare coal was recently available.
+
+If lost capacity explains the fade, the price-by-capacity interaction should be significant and adding it should shrink the price-by-time trend. Henry Hub is still a national price: no free daily Texas hub series (Houston Ship Channel, Waha) was available, so this remains descriptive rather than causal."""),
+    ("code", '''h = q("""SELECT local_date, MAX(coal_mwh) AS coal_max, AVG(coal_mwh) AS coal_avg,
+                  AVG(GREATEST(avg_temp_c - 18.3, 0)) AS cdd, AVG(GREATEST(18.3 - avg_temp_c, 0)) AS hdd,
+                  MIN(avg_temp_c) AS tmin, MAX(avg_temp_c) AS tmax
+           FROM model_hourly GROUP BY 1 ORDER BY 1""")
+h["coal_cap_gw"] = h.coal_max.shift(1).rolling(30, min_periods=10).max() / 1000
+h["headroom_gw"] = h.coal_cap_gw - h.coal_avg.shift(1).rolling(30, min_periods=10).mean() / 1000
+g = d.merge(h, on="local_date").dropna(subset=["coal_cap_gw"]).copy()
+g["cap_c"] = g.coal_cap_gw - g.coal_cap_gw.mean()
+g["head_c"] = g.headroom_gw - g.headroom_gw.mean()
+g["t_c"] = (pd.to_datetime(g.local_date) - pd.Timestamp("2022-07-01")).dt.days / 365.25
+CTL = "nl_gw + I(nl_gw**2) + cdd + I(cdd**2) + hdd + I(hdd**2) + C(month) + C(year)"
+HAC = dict(cov_type="HAC", cov_kwds={"maxlags": 7})
+SPECS = {
+    "Add weather controls": ("log_p + " + CTL, g),
+    "Weather, mild days only": ("log_p + " + CTL, g[(g.tmin > 0) & (g.tmax < 33)]),
+    "Add coal capacity proxy": ("log_p + cap_c + " + CTL, g),
+    "Price x capacity": ("log_p * cap_c + " + CTL, g),
+    "Price x time": ("log_p + log_p:t_c + " + CTL, g),
+    "Price x headroom": ("log_p * head_c + " + CTL, g),
+    "Price x headroom, price x time": ("log_p * head_c + log_p:t_c + " + CTL, g),
+}
+rows = []
+for name, (rhs, data) in SPECS.items():
+    m = smf.ols("gas_fossil_share_pct ~ " + rhs, data).fit(**HAC)
+    row = {"spec": name, "days": int(m.nobs)}
+    for term, label in [("log_p", "per doubling"), ("log_p:cap_c", "x capacity (per GW)"),
+                        ("log_p:head_c", "x headroom (per GW)"), ("log_p:t_c", "x time (per year)")]:
+        if term in m.params:
+            row[label] = round(m.params[term] * LN2, 2)
+            row[label + " p"] = round(m.pvalues[term], 3)
+    rows.append(row)
+robust = pd.DataFrame(rows)
+robust.to_csv("data/clean/gas_robustness.csv", index=False)
+display(robust)
+g.groupby("year")[["coal_cap_gw", "headroom_gw"]].mean().round(2)'''),
 ])
 # ---------------------------------------------------------------- 05 growth, drivers, misses
 build("05_drivers_and_misses.ipynb", [
