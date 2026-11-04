@@ -1,0 +1,6 @@
+,RMSE (MWh),MAPE (%),bias (MWh)
+Baseline: same hour last week,6482.0,8.53,-28.0
+"Mine, hindsight version (notebook 02)",1971.0,2.52,50.0
+"Mine, 9:30 am information only",2238.0,3.05,-304.0
+ERCOT 9:30 am posting (ERCOT API),1810.0,2.38,410.0
+"ERCOT day-ahead, EIA-930 copy",1757.0,2.31,418.0

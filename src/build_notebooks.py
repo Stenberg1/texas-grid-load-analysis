@@ -112,7 +112,7 @@ build("02_model.ipynb", [
     ("md", """# 02 · Day-ahead load forecast
 **Forecast definition:** predict each hour's ERCOT demand one day ahead. Every feature must be known a day earlier: calendar fields, demand lags of 24 h and 168 h, and temperature.
 **Temperature:** load-weighted average of 8 Texas cities (weights = each ERCOT weather zone's share of 2019–2023 load).
-**Limitation:** temperature is *observed* temperature standing in for a day-ahead weather forecast, so our error is optimistic. ERCOT's own forecast, which we compare against, had to use real weather forecasts.
+**Limitation:** this is the hindsight version. It uses observed temperature and yesterday's full load, neither of which a forecaster has at ERCOT's 9:30 am posting. Notebook 06 rebuilds the forecast with only what was known at 9:30 am, and that is the headline result.
 **Split:** train 2019–2023, test 2024–2025 (by time, never random). The temperature definition is chosen on a 2023 validation year, never on the test set."""),
     ("code", SETUP),
     ("code", '''df = q("SELECT * FROM model_hourly ORDER BY period")
@@ -278,15 +278,6 @@ worst_days = (test.groupby(test.local_ts.dt.date)
                        min_temp=("avg_temp_c", "min"), max_temp=("avg_temp_c", "max"), holiday=("is_holiday", "max"))
                   .sort_values("mape", ascending=False).head(10).round(1))
 worst_days'''),
-    ("code", '''import plotly.graph_objects as go
-from viz import add_caption, save, SERIES
-fig = go.Figure()
-for i, (col, name) in enumerate([("ape_baseline", "Baseline (last week)"), ("ape_best", best_name), ("ape_ercot", "ERCOT official forecast")]):
-    fig.add_bar(x=by_season.index, y=by_season[col], name=name, marker_color=SERIES[i])
-fig.update_layout(title="Forecast error by season, test set 2024–2025", barmode="group", bargap=0.35, bargroupgap=0.08,
-                  yaxis_title="Mean absolute % error", xaxis_title="Season")
-add_caption(fig, "Winter is the hardest season for every forecast: cold snaps (and holidays such as MLK Day during them) drive the biggest misses.")
-save(fig, "model_error_by_season")'''),
 ])
 
 # ---------------------------------------------------------------- 03 charts
@@ -461,7 +452,7 @@ g.groupby("year")[["coal_cap_gw", "headroom_gw"]].mean().round(2)'''),
 ])
 # ---------------------------------------------------------------- 05 growth, drivers, misses
 build("05_drivers_and_misses.ipynb", [
-    ("md", """# 05 · Weather-adjusted growth, what drives the model, and its biggest misses"""),
+    ("md", """# 05 · Weather-adjusted growth, and diagnostics on the hindsight model\nSections 2 to 4 study the hindsight model from notebook 02. Notebook 06 repeats the importance and misses analysis for the 9:30 am model."""),
     ("code", SETUP + '''
 import statsmodels.formula.api as smf
 import plotly.graph_objects as go
@@ -571,21 +562,6 @@ for g, cols in groups.items():
 imp = pd.DataFrame(rows).sort_values("mape_increase_pts", ascending=False).round(3)
 imp.to_csv("data/clean/feature_importance.csv", index=False)
 imp'''),
-    ("code", '''srt = imp.sort_values("mape_increase_pts")
-fig = go.Figure()
-for is_city, label, color in [(True, "City temperature", SERIES[0]), (False, "Other input", SERIES[1])]:
-    s = srt[srt.is_city == is_city]
-    fig.add_bar(y=s.input, x=s.mape_increase_pts, orientation="h", name=label, marker_color=color,
-                error_x=dict(type="data", array=s.sd, color=INK_2, thickness=1),
-                hovertemplate="%{y}: +%{x:.2f} pts<extra></extra>")
-fig.update_layout(title="What drives the day-ahead forecast (test set 2024–2025)", barmode="overlay", bargap=0.3,
-                  xaxis_title="Rise in MAPE when the input is shuffled (percentage points)", yaxis_title="",
-                  yaxis=dict(categoryorder="array", categoryarray=list(srt.input)), margin=dict(l=170))
-top_city = imp[imp.is_city].iloc[0]
-added = imp[imp.input.isin(["Corpus Christi", "Tyler", "Midland", "Lubbock"])].mape_increase_pts.sum()
-dallas = imp.set_index("input").mape_increase_pts["Dallas"]
-add_caption(fig, f"{imp.iloc[0].input} matters most. The four added cities together: {added:.2f} pts, vs Dallas alone: {dallas:.2f} pts. Bars: ±1 sd over 5 shuffles.")
-save(fig, "feature_importance", height=680)'''),
     ("md", """## 3. The model's 10 biggest misses
 Worst days on the test set by daily MAPE for the main model (notebook 02). The context column is generated from the data: holidays, the day after a holiday (the model anchors on yesterday's load), freezing or extreme heat, and big temperature swings from the day before. The one hand-labelled event is Hurricane Beryl."""),
     ("code", '''t = pd.read_parquet("data/clean/test_predictions.parquet")
@@ -695,4 +671,176 @@ six_pm = pd.DataFrame(out).T.round(3)
 six_pm.to_csv("data/clean/six_pm_test.csv")
 six_pm'''),
 ])
+# ---------------------------------------------------------------- 06 9:30 am forecast
+build("06_operational_forecast.ipynb", [
+    ("md", '''# 06 · A forecast that only uses what was known at 9:30 am
+ERCOT posts its day-ahead forecast at 9:30 am on the day before delivery. The model in notebook 02 used observed temperature and yesterday's load for every hour, so its comparison with ERCOT was not like for like. This notebook removes both advantages.
+
+- **Load:** known only through hour ending 9 on the day before delivery. The rules are asserted in `src/op_forecast.py`.
+- **Weather:** archived model forecasts (Open-Meteo Previous Runs), using the newest run already out at 9:30 am. GFS is the main source and JMA fills GFS's archive gap (2023-12-30 to 2024-01-19).
+- **Target:** load divided by a baseline, the average of the same hour over recent fully known non-holiday days. Cross-validation below compares 14 and 28 days.
+- **Holidays:** left out of the baseline and of the recent-load signals, so a holiday can't drag down the days after it.
+- **Recent weather:** rolling 24 and 72 hour forecast temperature and the overnight low, because buildings hold heat and cold.
+- **Choices:** inputs are compared with expanding-window cross-validation over 2022 and 2023, and settings are tuned on 2023. The 2024 to 2025 test set is only scored at the end.'''),
+    ("code", SETUP + '''
+import itertools, warnings
+import plotly.graph_objects as go
+import op_forecast as op
+from viz import add_caption, save, SERIES, INK_2
+warnings.filterwarnings("ignore")
+base, holidays = op.load_frame(con)
+base, city_cols, offset = op.add_forecast_weather(base, con, pd.read_parquet("data/raw/weather_forecast.parquet"),
+                                                  pd.read_parquet("data/raw/weather.parquet"))
+print(f"forecast minus observed offset used before the archive starts: {offset:+.2f} °C")
+X = {n: op.add_load_features(base, holidays, n) for n in [14, 28]}
+for x in X.values():
+    op.assert_no_leak(x)
+e = (base.fc_temp - base.avg_temp_c)[base.period >= "2021-04-01"]
+yrs = base.period[base.period >= "2021-04-01"].dt.year
+pd.DataFrame({"mean error (°C)": e.groupby(yrs).mean(), "mean absolute error (°C)": e.abs().groupby(yrs).mean()}).round(2)'''),
+    ("md", "## Structure and tuning: expanding-window CV, one fold per quarter"),
+    ("code", '''def quarters(y):
+    return [(f"{y}-01-01", f"{y}-04-01"), (f"{y}-04-01", f"{y}-07-01"), (f"{y}-07-01", f"{y}-10-01"), (f"{y}-10-01", f"{y + 1}-01-01")]
+def cv(x, feats, params=None, folds=quarters(2023)):
+    d = op.usable(x)
+    errs = []
+    for a, b in folds:
+        tr, va = d[d.op_date < a], d[(d.op_date >= a) & (d.op_date < b)]
+        m = op.fit(tr, feats, params)
+        errs.append((va.demand_mwh - op.predict(m, va, feats)).abs() / va.demand_mwh)
+    return round(100 * pd.concat(errs).mean(), 3)
+
+SETS = {"core": op.CORE, "core + holiday-adjacent flags": op.CORE + op.ADJACENT,
+        "core + flags + city temperatures": op.CORE + op.ADJACENT + city_cols,
+        "core + flags + cities + recent weather": op.CORE + op.ADJACENT + city_cols + op.THERMAL}
+structure = pd.DataFrame([{"baseline days": n, "inputs": k, "CV 2022": cv(X[n], f, folds=quarters(2022)), "CV 2023": cv(X[n], f)}
+                          for n, (k, f) in itertools.product(X, SETS.items())])
+structure["CV MAPE"] = structure[["CV 2022", "CV 2023"]].mean(axis=1).round(3)
+structure.to_csv("data/clean/op_structure_cv.csv", index=False)
+structure'''),
+    ("code", '''best = structure.loc[structure["CV MAPE"].idxmin()]
+x, feats = X[int(best["baseline days"])], SETS[best["inputs"]]
+print("chosen:", int(best["baseline days"]), "days,", best["inputs"])
+grid = [dict(learning_rate=l, max_iter=i, max_leaf_nodes=n, min_samples_leaf=s)
+        for l, i, n, s in itertools.product([0.03, 0.1], [200, 500], [15, 31], [20, 60])]
+grid.append(dict(learning_rate=0.1, max_iter=800, max_leaf_nodes=31, min_samples_leaf=20))   # past the edge of the grid
+tuning = pd.DataFrame([{**p, "CV MAPE": cv(x, feats, p)} for p in grid]).sort_values("CV MAPE")
+tuning.to_csv("data/clean/op_tuning_cv.csv", index=False)
+params = tuning.iloc[0].drop("CV MAPE").to_dict()
+params = {k: (float(v) if k == "learning_rate" else int(v)) for k, v in params.items()}
+print("default settings CV MAPE:", cv(x, feats)); print("chosen:", params)
+tuning.head(5)'''),
+    ("md", "## Scoring the test set, once"),
+    ("code", '''d = op.usable(x)
+train, test = d[d.year <= 2023], d[d.year >= 2024].copy()
+model = op.fit(train, feats, params)
+test["pred"] = op.predict(model, test, feats)
+api = q("SELECT period, AVG(system_total_mwh) AS ercot_api_mwh FROM fact_ercot_forecast_model WHERE in_use GROUP BY 1")
+api["period"] = pd.to_datetime(api.period, utc=True)
+hind = pd.read_parquet("data/clean/test_predictions.parquet")[["period", "pred_best"]].rename(columns={"pred_best": "pred_hindsight"})
+hind["period"] = pd.to_datetime(hind.period, utc=True)
+lags = q("SELECT period, demand_lag_168 FROM model_hourly"); lags["period"] = pd.to_datetime(lags.period, utc=True)
+t = test.merge(api, on="period").merge(hind, on="period").merge(lags, on="period").dropna(subset=["ercot_forecast_mwh"]).copy()
+print(f"{len(t):,} test hours scored by every forecast")
+y = t.demand_mwh
+forecasts = {"Baseline: same hour last week": t.demand_lag_168,
+             "Mine, hindsight version (notebook 02)": t.pred_hindsight,
+             "Mine, 9:30 am information only": t.pred,
+             "ERCOT 9:30 am posting (ERCOT API)": t.ercot_api_mwh,
+             "ERCOT day-ahead, EIA-930 copy": t.ercot_forecast_mwh}
+results = pd.DataFrame({k: {"RMSE (MWh)": round(op.rmse(y, v)), "MAPE (%)": round(op.mape(y, v), 2), "bias (MWh)": round((v - y).mean())}
+                        for k, v in forecasts.items()}).T
+results.to_csv("data/clean/op_results.csv")
+results'''),
+    ("code", '''t["ape"] = 100 * (t.pred - y).abs() / y
+t["ape_ercot"] = 100 * (t.ercot_api_mwh - y).abs() / y
+days = t.groupby("op_date")[["ape", "ape_ercot"]].mean()
+print(f"days mine beats ERCOT's 9:30 am posting: {100 * (days.ape < days.ape_ercot).mean():.1f}% of {len(days)}")
+print(f"hours: {100 * (t.ape < t.ape_ercot).mean():.1f}%")
+by_year = t.groupby("year")[["ape", "ape_ercot"]].mean().round(2)
+by_season = t.groupby("season")[["ape", "ape_ercot"]].mean().round(2).loc[["Winter", "Spring", "Summer", "Fall"]]
+display(by_year); display(by_season)
+summer_pm = t[t.month.between(6, 9) & t.he.between(16, 20)]
+peak = t.groupby("op_date").apply(lambda g: pd.Series({
+    "actual": g.demand_mwh.max(), "mine": g.pred.max(), "ercot": g.ercot_api_mwh.max(), "hour_ok_mine": g.pred.idxmax() == g.demand_mwh.idxmax(),
+    "hour_ok_ercot": g.ercot_api_mwh.idxmax() == g.demand_mwh.idxmax()}))
+peak_rows = {"All hours": (op.mape(y, t.pred), op.mape(y, t.ercot_api_mwh)),
+             "Summer, 4 to 8 pm": (op.mape(summer_pm.demand_mwh, summer_pm.pred), op.mape(summer_pm.demand_mwh, summer_pm.ercot_api_mwh)),
+             "Size of each day's peak": (op.mape(peak.actual.astype(float), peak.mine.astype(float)), op.mape(peak.actual.astype(float), peak.ercot.astype(float)))}
+peaks = pd.DataFrame(peak_rows, index=["mine", "ERCOT"]).T.round(2)
+peaks.to_csv("data/clean/op_peak_error.csv")
+print(f"peak hour called exactly: mine {100 * peak.hour_ok_mine.astype(float).mean():.0f}%, ERCOT {100 * peak.hour_ok_ercot.astype(float).mean():.0f}%")
+peaks'''),
+    ("md", "## Did the holiday fix work?\nSame model and settings with holidays left in the baseline and recent-load signals, scored on holidays, the two days after them, and all other days."),
+    ("code", '''raw = op.add_load_features(base, holidays, int(best["baseline days"]), skip_holidays=False)
+ru = op.usable(raw)
+rtr, rte = ru[ru.year <= 2023], ru[ru.year >= 2024].copy()
+rte["pred_nofix"] = op.predict(op.fit(rtr, feats, params), rte, feats)
+c = t.merge(rte[["period", "pred_nofix"]], on="period")
+c["ape_nofix"] = 100 * (c.pred_nofix - c.demand_mwh).abs() / c.demand_mwh
+hd = pd.to_datetime(sorted(holidays))
+after = set(hd + pd.Timedelta(days=1)) | set(hd + pd.Timedelta(days=2))
+c["group"] = np.where(c.holiday == 1, "Holiday", np.where(c.op_date.isin(after), "One or two days after", "Other days"))
+hol = c.groupby("group")[["ape_nofix", "ape", "ape_ercot"]].mean().round(2)
+hol["hours"] = c.groupby("group").size()
+hol.to_csv("data/clean/op_holiday_fix.csv")
+hol'''),
+    ("md", "## What drives the 9:30 am model\nGrouped permutation importance on the test set: shuffle a group of inputs, measure the rise in MAPE, five shuffles each. The baseline stays fixed. Correlated inputs split credit, so a low score means the input adds little that the others don't carry, not that it is irrelevant."),
+    ("code", '''groups = {c.replace("t_", "").replace("_", " ").title(): [c] for c in city_cols}
+groups.update({"Statewide temperature": ["fc_temp", "cool", "heat", "temp_sq", "temp_vs_baseline"],
+               "Hour of day": ["he"], "Day of week": ["dow", "weekend"], "Month": ["month"],
+               "Holiday flags": ["holiday", "day_after_holiday", "day_before_holiday"],
+               "Recent weather": op.THERMAL, "Morning load, day before": ["morning_ratio"], "Load two days before": ["d2_ratio"],
+               "Baseline temperature": ["baseline_temp"]})
+cities = set(c.replace("t_", "").replace("_", " ").title() for c in city_cols)
+base_mape = op.mape(t.demand_mwh, op.predict(model, t, feats))
+rng = np.random.default_rng(0)
+rows = []
+for name, cols in groups.items():
+    rises = []
+    for _ in range(5):
+        s = t.copy(); idx = rng.permutation(len(s))
+        for c_ in cols:
+            s[c_] = s[c_].values[idx]
+        rises.append(op.mape(t.demand_mwh, op.predict(model, s, feats)) - base_mape)
+    rows.append({"input": name, "is_city": name in cities, "mape_increase_pts": np.mean(rises), "sd": np.std(rises)})
+imp = pd.DataFrame(rows).sort_values("mape_increase_pts", ascending=False).round(3)
+imp.to_csv("data/clean/op_feature_importance.csv", index=False)
+imp'''),
+    ("code", '''srt = imp.sort_values("mape_increase_pts")
+fig = go.Figure()
+for is_city, label, color in [(True, "City temperature", SERIES[0]), (False, "Other input", SERIES[1])]:
+    s = srt[srt.is_city == is_city]
+    fig.add_bar(y=s.input, x=s.mape_increase_pts, orientation="h", name=label, marker_color=color,
+                error_x=dict(type="data", array=s.sd, color=INK_2, thickness=1),
+                hovertemplate="%{y}: +%{x:.2f} pts<extra></extra>")
+fig.update_layout(title="What drives the 9:30 am forecast (test set 2024–2025)", barmode="overlay", bargap=0.3,
+                  xaxis_title="Rise in MAPE when the input is shuffled (percentage points)", yaxis_title="",
+                  yaxis=dict(categoryorder="array", categoryarray=list(srt.input), tickmode="array", tickvals=list(srt.input), tickfont=dict(size=12)), margin=dict(l=190, b=170))
+add_caption(fig, f"{imp.iloc[0].input} matters most, then {imp.iloc[1].input.lower()}. Correlated inputs split credit. Bars: ±1 sd over 5 shuffles.")
+save(fig, "feature_importance", height=720)'''),
+    ("code", '''t["ape_base"] = 100 * (t.demand_lag_168 - y).abs() / y
+s = t.groupby("season")[["ape_base", "ape", "ape_ercot"]].mean().loc[["Winter", "Spring", "Summer", "Fall"]]
+fig = go.Figure()
+for i, (col, name) in enumerate([("ape_base", "Baseline (last week)"), ("ape", "Mine (9:30 am information)"), ("ape_ercot", "ERCOT 9:30 am posting")]):
+    fig.add_bar(x=s.index, y=s[col], name=name, marker_color=SERIES[i], hovertemplate=name + " · %{x}: %{y:.2f}%<extra></extra>")
+fig.update_layout(title="Forecast error by season, test set 2024–2025", barmode="group", bargap=0.35, bargroupgap=0.08,
+                  yaxis_title="Mean absolute % error", xaxis_title="Season")
+add_caption(fig, "All three use only information available at 9:30 am the day before. Winter is the hardest season for each.")
+save(fig, "model_error_by_season")
+s.round(2)'''),
+    ("md", "## The 10 biggest misses"),
+    ("code", '''names = pd.read_parquet("data/clean/us_holidays.parquet")
+names = dict(zip(pd.to_datetime(names.holiday_date), names.holiday_name))
+t["err"] = t.pred - t.demand_mwh
+miss = t.groupby("op_date").agg(mine=("ape", "mean"), ercot=("ape_ercot", "mean"), mean_error_gw=("err", lambda e: e.mean() / 1000),
+                                tmin=("avg_temp_c", "min"), tmax=("avg_temp_c", "max"), fc_error=("fc_temp", "mean"), obs=("avg_temp_c", "mean"))
+miss["temp_forecast_miss_c"] = miss.fc_error - miss.obs
+worst = miss.sort_values("mine", ascending=False).head(10).drop(columns=["fc_error", "obs"]).round(1)
+worst["holiday"] = [names.get(d, "") for d in worst.index]
+worst.to_csv("data/clean/op_biggest_misses.csv")
+t[["period", "op_date", "he", "season", "demand_mwh", "pred", "ercot_api_mwh", "ape", "ape_ercot"]].to_parquet("data/clean/op_test_predictions.parquet", index=False)
+worst'''),
+])
+
 print("built")

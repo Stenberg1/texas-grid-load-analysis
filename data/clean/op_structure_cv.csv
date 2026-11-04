@@ -1,0 +1,9 @@
+baseline days,inputs,CV 2022,CV 2023,CV MAPE
+14,core,3.842,3.328,3.585
+14,core + holiday-adjacent flags,3.823,3.305,3.564
+14,core + flags + city temperatures,3.653,3.152,3.402
+14,core + flags + cities + recent weather,3.335,3.174,3.254
+28,core,3.965,3.3,3.632
+28,core + holiday-adjacent flags,3.949,3.293,3.621
+28,core + flags + city temperatures,3.775,3.174,3.474
+28,core + flags + cities + recent weather,3.428,3.103,3.266

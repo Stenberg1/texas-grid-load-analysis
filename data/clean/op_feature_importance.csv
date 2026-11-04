@@ -1,0 +1,18 @@
+input,is_city,mape_increase_pts,sd
+Statewide temperature,False,2.266,0.021
+Recent weather,False,1.902,0.013
+Baseline temperature,False,1.201,0.012
+"Morning load, day before",False,1.136,0.013
+Day of week,False,0.789,0.007
+Dallas,True,0.691,0.008
+Hour of day,False,0.524,0.012
+Tyler,True,0.206,0.005
+Houston,True,0.148,0.001
+Load two days before,False,0.137,0.005
+Month,False,0.128,0.008
+Lubbock,True,0.074,0.003
+Corpus Christi,True,0.067,0.003
+San Antonio,True,0.058,0.005
+Holiday flags,False,0.049,0.002
+Midland,True,0.023,0.002
+Austin,True,-0.0,0.004
