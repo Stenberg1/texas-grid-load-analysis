@@ -843,4 +843,56 @@ t[["period", "op_date", "he", "season", "demand_mwh", "pred", "ercot_api_mwh", "
 worst'''),
 ])
 
+# ---------------------------------------------------------------- 07 prices
+build("07_prices.ipynb", [
+    ("md", '''# 07 · What the grid's changes are worth: day-ahead prices
+Hourly day-ahead settlement prices from ERCOT's public report NP4-180-ER, 2019 to 2025. `HB_BUSAVG` is the average across the hubs' buses. Uri (Feb 10–20 2021) is excluded from the yearly tables and studied separately.'''),
+    ("code", SETUP + '''
+import plotly.graph_objects as go
+from viz import add_caption, save, SERIES, INK
+p = pd.read_parquet("data/raw/ercot_dam_prices.parquet")
+p["d"] = pd.to_datetime(p.delivery_date)
+p = p[~p.repeated_hour]
+uri = p.d.between("2021-02-10", "2021-02-20")
+P = p[(p.hub == "HB_BUSAVG") & ~uri].pivot_table(index="d", columns="hour_ending", values="price_usd_mwh")
+print(P.shape, "days x hours")'''),
+    ("md", "## The evening premium\nMedians, because a few scarcity days dominate the means. Midday is hours ending 11 am to 3 pm and evening is hours ending 7 to 9 pm. The spread is the top two hours minus the bottom two hours each day, a rough gross margin per MWh for a two-hour battery before losses."),
+    ("code", '''def table(frame):
+    srt = np.sort(frame.dropna().values, axis=1)
+    return pd.DataFrame({"midday": frame.loc[:, 11:15].mean(axis=1).groupby(frame.index.year).median(),
+                         "evening": frame.loc[:, 19:21].mean(axis=1).groupby(frame.index.year).median(),
+                         "daily spread": pd.Series(srt[:, -2:].mean(axis=1) - srt[:, :2].mean(axis=1), index=frame.dropna().index).groupby(frame.dropna().index.year).median()})
+annual, spring = table(P), table(P[P.index.month.isin([3, 4, 5])])
+annual["evening premium"], spring["evening premium"] = annual.evening - annual.midday, spring.evening - spring.midday
+annual.round(1).to_csv("data/clean/price_premium_annual.csv"); spring.round(1).to_csv("data/clean/price_premium_spring.csv")
+display(annual.round(1)); spring.round(1)'''),
+    ("code", '''fig = go.Figure()
+for i, (col, name) in enumerate([("evening", "Evening, 7 to 9 pm"), ("midday", "Midday, 11 am to 3 pm")]):
+    fig.add_scatter(x=spring.index, y=spring[col], mode="lines+markers", name=name, line=dict(color=SERIES[i], width=2.5), marker=dict(size=8),
+                    hovertemplate=name + " · %{x}: $%{y:.0f}/MWh<extra></extra>")
+    fig.add_annotation(x=2025, y=spring[col].iloc[-1], text=f"{name.split(',')[0]} ${spring[col].iloc[-1]:.0f}", showarrow=False, xanchor="left", xshift=8, font=dict(color=INK))
+fig.update_layout(title="Spring day-ahead prices: evenings have pulled away from midday", xaxis_title="Year", yaxis_title="Median price ($/MWh)",
+                  xaxis=dict(tickvals=list(range(2019, 2026)), range=[2018.7, 2026.1]), yaxis=dict(rangemode="tozero"), margin=dict(r=130))
+add_caption(fig, f"The spring evening premium rose from {spring['evening premium'][2019]:.1f} to {spring['evening premium'][2025]:.1f} dollars per MWh. 2022 reflects high gas prices. HB_BUSAVG, March to May medians.")
+save(fig, "evening_premium")'''),
+    ("md", "## Winter Storm Uri at day-ahead prices\nDay-ahead price times served demand. This is a measure of market value, not what customers paid: hedges, real-time settlement, and later securitization all change the final bill."),
+    ("code", '''b = p[p.hub == "HB_BUSAVG"]
+d = q("SELECT local_ts, local_hour, demand_mwh FROM model_hourly")
+d["local_ts"] = pd.to_datetime(d.local_ts)
+d["d"] = (d.local_ts - pd.Timedelta(hours=1)).dt.normalize(); d["hour_ending"] = d.local_hour.replace(0, 24)
+m = d.merge(b, on=["d", "hour_ending"]); m["value"] = m.demand_mwh * m.price_usd_mwh
+yearly = (m.groupby(m.d.dt.year).value.sum() / 1e9).round(1).rename("$bn")
+u = m[m.d.between("2021-02-14", "2021-02-19")]
+before = m[m.d.between("2021-01-20", "2021-02-09")]
+print(f"Feb 14-19 2021: ${u.value.sum() / 1e9:.1f}bn on {u.demand_mwh.sum() / 1000:,.0f} GWh, average ${u.value.sum() / u.demand_mwh.sum():,.0f}/MWh, max ${u.price_usd_mwh.max():,.0f}")
+print(f"Jan 20-Feb 9 2021 average: ${before.value.sum() / before.demand_mwh.sum():.2f}/MWh")
+yearly'''),
+    ("md", "## West Texas: from cheap power to a premium\nWest hub minus North hub. Through 2022 West was cheaper, as wind crowded export lines. If local load outgrows the wires, the sign flips."),
+    ("code", '''h = p[~uri].pivot_table(index=["d", "hour_ending"], columns="hub", values="price_usd_mwh")
+gap = h.HB_WEST - h.HB_NORTH
+yrs = gap.index.get_level_values(0).year
+west = pd.DataFrame({"West minus North ($/MWh)": gap.groupby(yrs).mean(), "% of hours West is $5+ above North": 100 * (gap > 5).groupby(yrs).mean()}).round(1)
+west.to_csv("data/clean/west_hub_gap.csv")
+west'''),
+])
 print("built")
